@@ -1,0 +1,836 @@
+---
+title: "Distance functions underlying natural enemy within-field distributions: assessing the effects of crop type and adjacent habitats"
+subtitle: "Appendix 3: Post-processing and visualization of marginal predictions"
+author: 
+  - Fabian A. Boetzl
+  - Douglas B. Sponsler  
+  - Matthias Albrecht
+  - Péter Batáry
+  - Klaus Birkhofer
+  - Michal Knapp
+  - Jochen Krauss
+  - Bea Maas
+  - Emily A. Martin
+  - Clélia Sirami
+  - Louis Sutter
+  - Colette Bertrand
+  - Aliette Bosem Baillod
+  - Gerard Bota
+  - Vincent Bretagnolle
+  - Lluís Brotons
+  - Thomas Frank
+  - Moritz Fusser
+  - David Giralt
+  - Ezequiel González
+  - Anouschka Hof
+  - Henryk Luka
+  - Ronan Marrec
+  - Michael A. Nash
+  - Katherina Ng
+  - Manuel Plantegenest
+  - Brigitte Poulin
+  - Gavin Siriwardena
+  - Teja Tscharntke
+  - Matthias Tschumi
+  - Aude Vialatte
+  - Laura Van Vooren
+  - Muhammad Zubair-Anjum
+  - Martin H. Entling
+  - Ingolf Steffan-Dewenter
+  - Jens Schirmel
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+date: "`r Sys.Date()`"
+bibliography: 
+  - references.bib
+---
+
+\newpage
+
+# Summary
+
+This appendix details model post-processing and the visualization of marginal predictions. There are several valid ways of marginalizing model predictions, and the choice of which to use depends on the intended interpretation. 
+
+First, there is the question of what *kind* of prediction we're making. The `tidybayes` package [@Kay2020-aa] has helper functions for generating four kinds of predictions. From https://mjskay.github.io/tidybayes/reference/add_predicted_draws.html:
+
+>add_epred_draws() adds draws from expectation of the posterior predictive distribution to the data. It corresponds to rstanarm::posterior_epred() or brms::posterior_epred().
+
+>add_predicted_draws() adds draws from posterior predictive distribution to the data. It corresponds to rstanarm::posterior_predict() or brms::posterior_predict().
+
+>add_linpred_draws() adds draws from (possibly transformed) posterior linear predictors (or "link-level" predictors) to the data. It corresponds to rstanarm::posterior_linpred() or brms::posterior_linpred().
+
+>add_residual_draws() adds draws from residuals to the data. It corresponds to brms::residuals.brmsfit()
+
+We will use `tidybayes::add_epred_draws()`, which uses the posterior to predict mean values of the response variable. This corresponds to the default behavior of the `brms::conditional_effects()` [@Burkner2017-aa]. 
+
+Then there is the question of what to do with the varying effect of study/site. This is controlled by the `re_formula` argument in `tidybayes::add_epred_draws()`. One option is to make predictions imagining a random draw of one study/site combination (`re_formula = NULL`), thereby incorporating all the uncertainty of the study/site effect (thus creating wider intervals). Another option is to ignore the varying effects (`re_formula = NA`), which amounts to imagining a hypothetical study/site combination that is the average of all observed study/site combinations (that is, the global effect from which the varying effects deviate). We will go with the latter option, which again corresponds to the default behavior of `brms::conditional_effects()` [@Burkner2017-aa].
+
+For further reading: 
+
+  https://www.andrewheiss.com/blog/2021/11/10/ame-bayes-re-guide/#posterior-predictions
+  
+  https://github.com/paul-buerkner/brms/issues/82#issuecomment-231440994
+
+\newpage
+
+# Prepare environment  
+
+## Load packages
+
+\footnotesize  
+
+```{r message=FALSE, warning=FALSE}
+library(brms)
+library(emmeans)
+library(ggeffects)
+library(ggpubr)
+library(scales)
+library(ggh4x)
+library(bayesplot)
+library(flextable)
+library(sjPlot)
+library(tidybayes)
+library(ggdist)
+library(patchwork)
+library(kableExtra)
+library(grid)
+library(gridExtra)
+library(tidyverse)
+library(ggpp)
+```
+
+\normalsize
+
+## Load data and models
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+meta_rich             <- readRDS("../data/processed/meta_rich.rds")
+meta_rich_predatory   <- readRDS("../data/processed/meta_rich_predatory.rds")
+meta_rich_granivorous <- readRDS("../data/processed/meta_rich_granivorous.rds")
+meta_abund            <- readRDS("../data/processed/meta_abund.rds")
+meta_abund_diet       <- readRDS("../data/processed/meta_abund_diet.rds")
+meta_abund_size       <- readRDS("../data/processed/meta_abund_size.rds")
+meta_CWM              <- readRDS("../data/processed/meta_CWM.rds")
+
+size <- readRDS("../data/processed/size.rds")
+diet <- readRDS("../data/processed/diet.rds")
+
+brm_rich_00  <- readRDS("../output/brm_rich_00.rds")
+brm_rich_10  <- readRDS("../output/brm_rich_10.rds")
+brm_rich_20  <- readRDS("../output/brm_rich_20.rds")
+brm_abund_00 <- readRDS("../output/brm_abund_00.rds")
+brm_abund_10 <- readRDS("../output/brm_abund_10.rds")
+brm_abund_20 <- readRDS("../output/brm_abund_20.rds")
+brm_abund_30 <- readRDS("../output/brm_abund_30.rds")
+brm_abund_40 <- readRDS("../output/brm_abund_40.rds")
+brm_abund_50 <- readRDS("../output/brm_abund_50.rds")
+brm_size_00  <- readRDS("../output/brm_size_00.rds")
+```
+
+\normalsize
+
+## Define custom functions
+
+### Plotting functions
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+# prep data for rug plots
+get_rug <- function(x, name) {
+  
+  x %>%
+    select(crop.pool, snh.type, distance100) %>%
+    distinct() %>%
+    filter(distance100 <= 0.65) %>%
+    mutate(model = name)
+  
+}
+```
+
+\normalsize
+
+### epred extraction
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+# ~ distance
+get_epred <- function(x, name) {
+  
+  x %>%
+    add_epred_draws(
+      # predict out to 100 meters
+      newdata = expand_grid(distance100 = seq(0, 0.65, by = 0.01), 
+                            # condition on mean(log.trap.days)
+                            log.trap.days = mean(meta_rich$log.trap.days), 
+                            study = NA, # ignore study
+                            site = NA, # ignore site
+                            # include all SNH
+                            snh.type = c("control", "herbaceous", "woody"), 
+                            # include all crops
+                            crop.pool = c("Cereal", "Legume", "Maize", 
+                                          "Oilseed", "Vegetable")), 
+    re_formula = NA, # ignore group level (i.e. "random") effects
+    allow_new_levels = TRUE) %>% 
+  mutate(distance = distance100 * 100, # rescale distance back to meters
+         model = name) # plotting convenience
+}
+
+# ~ trap.days
+get_epred2 <- function(x, name) {
+  
+  x %>%
+    add_epred_draws(
+      newdata = expand_grid(distance100 = 0.25, # fix distance at 25 m
+                            log.trap.days = seq(
+                              min(meta_rich$log.trap.days), 
+                              max(meta_rich$log.trap.days) + 0.05, by = 0.1
+                              ), 
+                            # the + 0.05 is so that we cover the full range given the 0.1 step size
+                            study = NA, # ignore study
+                            site = NA, # ignore site
+                            snh.type = c("control", "herbaceous", "woody"), # include all SNH
+                            crop.pool = c("Cereal", "Legume", "Maize", 
+                                          "Oilseed", "Vegetable")), # include all crops
+      re_formula = NA, # ignore group level (i.e. "random") effects
+      allow_new_levels = TRUE) %>% # I think this needs to be TRUE?
+    mutate(distance = distance100 * 100, # rescale distance back to meters
+           model = name)
+}
+
+```
+
+\normalsize
+
+# Generate marginal predictions
+
+## Get epred
+
+Conditioned on mean(log.trap.days) for all combinations of crop and snh.type 
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+# Richness
+
+brm_rich_00_epred <- get_epred(brm_rich_00, "01_brm_rich_00")
+
+brm_rich_10_epred <- get_epred(brm_rich_10, "02_brm_rich_10")
+
+brm_rich_20_epred <- get_epred(brm_rich_20, "03_brm_rich_20")
+
+brm_rich_00_epred_trap.days <- get_epred2(brm_rich_00, "01_brm_rich_00")
+
+brm_rich_10_epred_trap.days <- get_epred2(brm_rich_10, "02_brm_rich_10")
+
+brm_rich_20_epred_trap.days <- get_epred2(brm_rich_20, "03_brm_rich_20")
+
+
+# Activity density
+
+brm_abund_00_epred <- get_epred(brm_abund_00, "04_brm_abund_00")
+
+brm_abund_10_epred <- get_epred(brm_abund_10, "05_brm_abund_10")
+
+brm_abund_20_epred <- get_epred(brm_abund_20, "06_brm_abund_20")
+
+brm_abund_30_epred <- get_epred(brm_abund_30, "07_brm_abund_30")
+
+brm_abund_40_epred <- get_epred(brm_abund_40, "08_brm_abund_40")
+
+brm_abund_50_epred <- get_epred(brm_abund_50, "09_brm_abund_50")
+
+
+# Size
+
+brm_size_00_epred <- get_epred(brm_size_00, "10_brm_size_00")
+
+
+# Merge
+epred_pool1 <- bind_rows(brm_rich_00_epred,
+                        brm_abund_10_epred,
+                        brm_abund_20_epred,
+                        brm_size_00_epred) %>%
+  mutate(model = factor(
+    model, levels = c("01_brm_rich_00", "05_brm_abund_10",
+                      "06_brm_abund_20", "10_brm_size_00")
+    )) %>%
+  mutate(crop.pool = tolower(crop.pool))
+
+
+epred_pool1.5 <- bind_rows(brm_rich_00_epred,
+                           brm_rich_10_epred,
+                           brm_rich_20_epred,
+                           brm_abund_00_epred,
+                           brm_abund_10_epred,
+                           brm_abund_20_epred,
+                           brm_size_00_epred) %>%
+  mutate(model = factor(
+    model, levels = c("01_brm_rich_00", "02_brm_rich_10", "03_brm_rich_20",  
+                      "04_brm_abund_00", "05_brm_abund_10", 
+                      "06_brm_abund_20", "10_brm_size_00")
+    )) %>%
+  mutate(crop.pool = tolower(crop.pool))
+
+
+epred_pool1b <- bind_rows(brm_abund_00_epred,
+                          brm_abund_30_epred,
+                          brm_abund_40_epred,
+                          brm_abund_50_epred) %>%
+  mutate(model = factor(
+    model, levels = c("04_brm_abund_00", "07_brm_abund_30",
+                      "08_brm_abund_40", "09_brm_abund_50")
+    )) %>%
+  mutate(crop.pool = tolower(crop.pool))
+
+
+epred_pool1c <- bind_rows(brm_rich_10_epred,
+                          brm_rich_20_epred) %>%
+  mutate(model = factor(
+    model, levels = c("02_brm_rich_10", "03_brm_rich_20")
+    )) %>%
+  mutate(crop.pool = tolower(crop.pool))
+```
+
+```{r include=FALSE}
+# Free up memory
+
+rm(brm_rich_00, brm_rich_10, brm_rich_20,
+   brm_abund_00, brm_abund_10, brm_abund_20,
+   brm_abund_30, brm_abund_40, brm_abund_50,
+   brm_size_00)
+
+gc()
+```
+
+\normalsize
+
+## Extract distance ranges to constrain plots
+The max distances are the same across meta_rich, meta_abund, and meta_CWM, so I will just extract once from meta_rich
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+max_dist_crop <- meta_rich %>%
+  group_by(crop.pool) %>%
+  summarize(max.dist = max(distance100*100)) %>%
+  mutate(crop.pool = tolower(crop.pool))
+
+max_dist_snh <- meta_rich %>%
+  group_by(snh.type) %>%
+  summarize(max.dist = max(distance100*100))
+```
+
+\normalsize
+
+## Marginalize
+We marginalize over SNH by grouping by distance, crop, and .draw, and taking the mean. This achieves proper marginalization because it makes it as though the study were balanced across crop and SNH. It removes the weighting effects of unequal sampling across crop and snh levels, because this is a synthetic data set where each is represented equally.
+
+Or should I just group the data by the focal variable (crop or snh) and plot the data without any summarizing? I don't think there is a right/wrong answer here. The "averaging" approach makes predictions for some imaginary "typical" habitat/crop that is the average of all the habitats/crops we know about. The "raw" approach makes sense if we imagine that we are predicting a new sample, and it could be any of our crops/habitats, but we don't know which one, and we want to capture all the uncertainty. Finally, the default approach of `brms::conditional_effects` makes predictions conditional on some known crop/habitat. I think the averaging approach makes the most sense in this context.
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+epred.crop1 <- epred_pool1 %>%
+  group_by(model, distance, crop.pool, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  left_join(max_dist_crop)
+
+epred.crop1b <- epred_pool1b %>%
+  group_by(model, distance, crop.pool, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  left_join(max_dist_crop)
+
+epred.crop1c <- epred_pool1c %>%
+  group_by(model, distance, crop.pool, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  left_join(max_dist_crop)
+
+epred.trap.days <- brm_rich_00_epred_trap.days %>%
+  group_by(log.trap.days, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  mutate(trap.days = exp(log.trap.days))
+
+
+# Do the same thing, but this time marginalizing over crop for snh.type
+epred.snh1 <- epred_pool1 %>%
+  group_by(model, distance, snh.type, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  left_join(max_dist_snh)
+
+epred.snh1b <- epred_pool1b %>%
+  group_by(model, distance, snh.type, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  left_join(max_dist_snh)
+
+epred.snh1c <- epred_pool1c %>%
+  group_by(model, distance, snh.type, .draw) %>%
+  summarize(.epred = mean(.epred)) %>%
+  left_join(max_dist_snh)
+
+# Finally, we can calculate a grand means by marginalizing over both crop and snh.type
+epred.grand1 <- epred_pool1 %>%
+  group_by(model, distance, .draw) %>%
+  summarize(.epred = mean(.epred))
+
+epred.grand1b <- epred_pool1b %>%
+  group_by(model, distance, .draw) %>%
+  summarize(.epred = mean(.epred))
+
+epred.grand1c <- epred_pool1c %>%
+  group_by(model, distance, .draw) %>%
+  summarize(.epred = mean(.epred))
+
+epred_pool3 <- bind_rows(brm_rich_00_epred,
+                           brm_rich_10_epred,
+                           brm_rich_20_epred,
+                           brm_abund_00_epred,
+                           brm_abund_10_epred,
+                           brm_abund_20_epred,
+                           brm_abund_30_epred,
+                           brm_abund_40_epred,
+                           brm_abund_50_epred) %>%
+  mutate(model = factor(model, levels = c("01_brm_rich_00", "02_brm_rich_10", 
+                                          "03_brm_rich_20",  "04_brm_abund_00", 
+                                          "05_brm_abund_10", "06_brm_abund_20", 
+                                          "07_brm_abund_30", "08_brm_abund_40", 
+                                          "09_brm_abund_50"))) %>%
+  mutate(crop.pool = tolower(crop.pool))
+
+
+
+epred.grand3 <- epred_pool3 %>%
+  group_by(model, distance, .draw) %>%
+  summarize(.epred = mean(.epred))
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+## Set up rugs for plotting
+
+\footnotesize
+```{r message=FALSE, warning=FALSE}
+rich_rug <- get_rug(meta_rich, "01_brm_rich_00")
+
+rich_rug1 <- get_rug(meta_rich, "02_brm_rich_10")
+
+rich_rug2 <- get_rug(meta_rich, "03_brm_rich_20")
+
+activity_rug0 <- get_rug(meta_abund, "04_brm_abund_00")
+
+activity_rug1 <- get_rug(meta_abund, "05_brm_abund_10")
+
+activity_rug2 <- get_rug(meta_abund, "06_brm_abund_20")
+
+activity_rug3 <- get_rug(meta_abund, "07_brm_abund_30")
+
+activity_rug4 <- get_rug(meta_abund, "08_brm_abund_40")
+
+activity_rug5 <- get_rug(meta_abund, "09_brm_abund_50")
+
+size_rug <- get_rug(meta_CWM, "10_brm_size_00")
+
+trap.days_rug <- meta_rich %>%
+  select(log.trap.days) %>%
+  mutate(trap.days = exp(log.trap.days)) %>%
+  distinct()
+
+
+rug_data1 <- bind_rows(rich_rug, activity_rug1, activity_rug2, size_rug) %>%
+  mutate(model = factor(model, levels = c("01_brm_rich_00", "05_brm_abund_10",
+                                          "06_brm_abund_20", "10_brm_size_00"))) %>%
+  mutate(crop.pool = tolower(crop.pool), distance = distance100 * 100)
+
+rug_data2 <- bind_rows(activity_rug0, activity_rug3, activity_rug4, activity_rug5) %>%
+  mutate(model = factor(model, levels = c("04_brm_abund_00", "07_brm_abund_30",
+                                          "08_brm_abund_40", "09_brm_abund_50"))) %>%
+  mutate(crop.pool = tolower(crop.pool), distance = distance100 * 100)
+
+rug_data3 <- bind_rows(rich_rug1, rich_rug2) %>%
+  mutate(model = factor(model, levels = c("02_brm_rich_10", "03_brm_rich_20"))) %>%
+  mutate(crop.pool = tolower(crop.pool), distance = distance100 * 100)
+```
+
+\normalsize
+
+## Visualize
+
+### By crop
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+# Total
+ggplot(filter(epred.crop1, distance <= max.dist), 
+       aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  labs(x = "distance [m]", y = NULL, fill = "Model", fill_ramp = "CI") +
+  facet_grid(model ~ crop.pool, 
+             scales = "free_y") +
+  theme_bw() +
+  theme(strip.text.y = element_blank(), 
+        strip.background.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position="bottom",
+        legend.box = "vertical") +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = guide_legend(order = 2)) +
+  scale_fill_discrete(labels = c("richness", 
+                                 "activity density\n(predatory + omnivorous)",
+                                 "activity density (granivorous)",
+                                 "size"))
+
+# By diet
+ggplot(filter(epred.crop1c, distance <= max.dist), 
+       aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data3, aes(distance), inherit.aes = FALSE) +
+  labs(x = "distance [m]", y = "richness", fill = "Model", fill_ramp = "CI") +
+  facet_grid(model ~ crop.pool, 
+             scales = "free_y") +
+  theme_bw() +
+  theme(strip.text.y = element_blank(), 
+        strip.background.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position="bottom",
+        legend.box = "vertical") +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = guide_legend(order = 2)) +
+  scale_fill_discrete(labels = c("richness\n(predatory + omnivorous)", 
+                                 "richness (granivorous)"))
+
+ggplot(filter(epred.crop1b, distance <= max.dist), 
+       aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data2, aes(distance), inherit.aes = FALSE) +
+  labs(x = "distance [m]", y = "activity density", fill = "Model", fill_ramp = "CI") +
+  facet_grid(model ~ crop.pool, 
+             scales = "free_y") +
+  theme_bw() +
+  theme(strip.text.y = element_blank(), 
+        strip.background.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position="bottom",
+        legend.box = "vertical") +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = guide_legend(order = 2)) +
+  scale_fill_discrete(labels = c("activity density (total)", 
+                                 "activity density (small)",
+                                 "activity density (medium)",
+                                 "activity density (large)"))
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+### By habitat
+
+\footnotesize
+```{r message=FALSE, warning=FALSE}
+ggplot(filter(epred.snh1, distance <= max.dist), 
+       aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  labs(x = "distance [m]", y = NULL, fill = "Model", fill_ramp = "CI") +
+  facet_grid(model ~ snh.type, scales = "free_y") +
+  theme_bw(9) +
+  theme(strip.text.y = element_blank(), 
+        strip.background.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position="bottom",
+        legend.box = "vertical") +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = guide_legend(order = 2)) +
+  scale_fill_discrete(labels = c("richness", 
+                                 "activity density\n(predatory + omnivorous)",
+                                 "activity density (granivorous)",
+                                 "size"))
+
+ggplot(filter(epred.snh1b, distance <= max.dist), 
+       aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data2, aes(distance), inherit.aes = FALSE) +
+  labs(x = "distance [m]", y = "activity density", fill = "Model", fill_ramp = "CI") +
+  facet_grid(model ~ snh.type, scales = "free_y") +
+  theme_bw(9) +
+  theme(strip.text.y = element_blank(), 
+        strip.background.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position="bottom",
+        legend.box = "vertical") +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = guide_legend(order = 2)) +
+  scale_fill_discrete(labels = c("activity density (total)", 
+                                 "activity density (small)",
+                                 "activity density (medium)",
+                                 "activity density (large)"))
+
+ggplot(filter(epred.snh1c, distance <= max.dist), 
+       aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data3, aes(distance), inherit.aes = FALSE) +
+  labs(x = "distance [m]", y = "richness", fill = "Model", fill_ramp = "CI") +
+  facet_grid(model ~ snh.type, scales = "free_y") +
+  theme_bw(9) +
+  theme(strip.text.y = element_blank(), 
+        strip.background.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position="bottom",
+        legend.box = "vertical") +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = guide_legend(order = 2)) +
+  scale_fill_discrete(labels = c("richness\n(predatory + omnivorous)",
+                                 "richness (granivorous)"))
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+### Richness by trap.days
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+ggplot(epred.trap.days, aes(trap.days, .epred)) +
+  stat_lineribbon(aes(fill_ramp = stat(level)), fill = "gray50") +
+  #stat_regline_equation()+
+  labs(x = "trap-days", y = "richness", fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(panel.grid = element_blank())
+
+# a <- ggplot(epred.trap.days, aes(trap.days, .epred)) +
+#   stat_lineribbon(aes(fill_ramp = stat(level)), fill = "gray50") +
+#   #stat_regline_equation()+
+#   labs(x = "trap-days", y = "richness", fill_ramp = "CI") +
+#   theme_bw(10) +
+#   theme(panel.grid = element_blank())
+#   
+# b <- ggplot(filter(brm_rich_00_slope_parameters, class == "trapping.days"), aes(coef)) +
+#   stat_halfeye() +
+#   labs(x = "slope coefficient", y = NULL) +
+#   theme_bw() +
+#   theme(panel.grid = element_blank()) +
+#   guides(color = guide_legend(order = 1),
+#          color_ramp = guide_legend(order = 2)) +
+#   geom_vline(xintercept = 1, linetype = "dashed", col = "black")
+# 
+# c <- a | b
+# 
+# ggsave("../figures/figure_S1.png", c, height = 4, width = 8)
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+### Grand mean
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+epred.grand1.1 <- droplevels(subset(epred.grand3, model=='01_brm_rich_00'))
+epred.grand1.2 <- droplevels(subset(epred.grand3, model=='02_brm_rich_10'))
+epred.grand1.3 <- droplevels(subset(epred.grand3, model=='03_brm_rich_20'))
+epred.grand1.4 <- droplevels(subset(epred.grand3, model=='04_brm_abund_00'))
+epred.grand1.5 <- droplevels(subset(epred.grand3, model=='05_brm_abund_10'))
+epred.grand1.6 <- droplevels(subset(epred.grand3, model=='06_brm_abund_20'))
+epred.grand1.8 <- droplevels(subset(epred.grand3, model=='07_brm_abund_30'))
+epred.grand1.9 <- droplevels(subset(epred.grand3, model=='08_brm_abund_40'))
+epred.grand1.X <- droplevels(subset(epred.grand3, model=='09_brm_abund_50'))
+
+
+p3.1 <- ggplot(epred.grand1.1, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('overall'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = " ", y = 'richness',  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        axis.title=element_text(size=12),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#F8766D'), labels = c("richness (overall)"))+
+  scale_y_continuous(limits=c(2.5,9.5)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+p3.2 <- ggplot(epred.grand1.2, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('predatory species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "", y = NULL,  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#D39200'), labels = c("richness (predatory)"))+
+  scale_y_continuous(limits=c(2.5,7)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+p3.3 <- ggplot(epred.grand1.3, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('granivorous species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "", y = NULL,  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#93AA00'), labels = c("richness (granivorous)"))+
+  scale_y_continuous(labels=c('0.5', '1.0', '1.5','2.0', '2.5'), 
+                     breaks = c(0.5,1,1.5,2,2.5), limits=c(0.3,3)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+p3.5 <- ggplot(epred.grand1.4, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('overall'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "", y = 'activity density',  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        axis.title=element_text(size=12),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#00BA38'), labels = c("activity density (overall)"))+
+  scale_y_continuous(limits=c(1,4)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+p3.6 <- ggplot(epred.grand1.5, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('predatory species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "", y = NULL,  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#00C19F'), labels = c("activity density (predatory)"))+
+  scale_y_continuous(labels=c('1.0', '1.5','2.0', '2.5','3.0'), 
+                     breaks = c(1,1.5,2,2.5,3), limits=c(0.5,3.5)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+p3.7 <- ggplot(epred.grand1.6, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('granivorous species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "", y = NULL,  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#00B9E3'), labels = c("activity density (granivorous)"))+
+  scale_y_continuous(labels=c('0.1','0.2','0.3','0.4'), 
+                     breaks = c(0.1,0.2,0.3,0.4), limits=c(0.06,0.42)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+
+p3.8 <- ggplot(epred.grand1.8, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('small species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "distance [m]", y = 'activity density',  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        axis.title=element_text(size=12),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#619CFF'), labels = c("activity density (small species)"))+
+  scale_y_continuous(limits=c(0.06,0.34)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+
+p3.9 <- ggplot(epred.grand1.9, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('medium sized species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "distance [m]", y = NULL,  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        axis.title=element_text(size=12),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#DB72FB'), labels = c("activity density (medium sized species)"))+
+  scale_y_continuous(limits=c(0.23,0.97)) +
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+
+p3.x <- ggplot(epred.grand1.X, aes(distance, .epred, fill = model)) +
+  stat_lineribbon(aes(fill_ramp = stat(level))) +
+  geom_rug(data = rug_data1, aes(distance), inherit.aes = FALSE) +
+  annotation_custom(grid::textGrob(label = expression(paste(italic('large species'))), 
+                                   x = unit(0.05, "npc"), y = unit(0.95, "npc"), 
+                                   gp = grid::gpar(cex = 1.00),hjust = 0, vjust=1)) +
+  labs(x = "distance [m]", y = NULL,  fill_ramp = "CI") +
+  theme_bw(10) +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank(),
+        axis.title=element_text(size=12),
+        legend.position = "none") +
+  scale_fill_manual(values=c('#FF61C3'), labels = c("activity density (large species)"))+
+  guides(fill = guide_legend(order = 1), 
+         fill_ramp = "none") 
+
+ggarrange(p3.1, p3.2, p3.3, p3.5, p3.6, p3.7, p3.8, p3.9, p3.x, 
+          ncol=3, nrow = 3, font.label = list(size = 12), 
+          labels = c("A", "B", 'C', 'D','E','F', 'G','H','I'), 
+          hjust=-0.25, common.legend = F, align = "hv")
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+
+# References

@@ -1,0 +1,1036 @@
+---
+title: "Distance functions underlying natural enemy within-field distributions: assessing the effects of crop type and adjacent habitats"
+subtitle: "Appendix 2: Modeling workflow"
+author: 
+  - Fabian A. Boetzl
+  - Douglas B. Sponsler  
+  - Matthias Albrecht
+  - Péter Batáry
+  - Klaus Birkhofer
+  - Michal Knapp
+  - Jochen Krauss
+  - Bea Maas
+  - Emily A. Martin
+  - Clélia Sirami
+  - Louis Sutter
+  - Colette Bertrand
+  - Aliette Bosem Baillod
+  - Gerard Bota
+  - Vincent Bretagnolle
+  - Lluís Brotons
+  - Thomas Frank
+  - Moritz Fusser
+  - David Giralt
+  - Ezequiel González
+  - Anouschka Hof
+  - Henryk Luka
+  - Ronan Marrec
+  - Michael A. Nash
+  - Katherina Ng
+  - Manuel Plantegenest
+  - Brigitte Poulin
+  - Gavin Siriwardena
+  - Teja Tscharntke
+  - Matthias Tschumi
+  - Aude Vialatte
+  - Laura Van Vooren
+  - Muhammad Zubair-Anjum
+  - Martin H. Entling
+  - Ingolf Steffan-Dewenter
+  - Jens Schirmel
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+date: "`r Sys.Date()`"
+bibliography: 
+  - references.bib
+---
+
+\newpage
+
+# Summary
+
+This appendix describes the Bayesian modeling workflow used in our study, which follows the principles outlined in @Gabry2019-mb. It includes all the code required to reproduce the models reported in our paper. This appendix is organized in a three-level nested fashion: first by workflow step, then by response variable (species richness, activity density), and then by specific model (i.e. a full dataset model and separate models based on dietary subsets or body size subsets).
+
+We begin with the specification of priors, which is an iterative process (reported in abbreviated form for the sake of clarity) in which candidate prior sets are evaluated via prior predictive checks to ensure that the parameter space considered by the model predicts broadly realistic data *before* seeing the empirical data [@Wesner2021-ha]. The use of regularizing (as opposed to flat or weakly informative) priors is especially important when using log-link generalized models, since the right tail of the parameter distribution can translate into implausibly high data predictions on the response scale [@Gabry2019-mb]. 
+
+Having chosen principled priors, we then fit the models to empirical data using the Hamiltonian Monte Carlo (HMC) algorithm of Stan [@Stan2020aa], accessed via the R package `brms` [@Burkner2017-aa]. We then verify the integrity of the HMC process by checking that sampling chains have converged (Rhat ~ 1), that effective sample sizes (ESS) are adequate, and that divergent transitions have been avoided. 
+
+When the computation integrity of a model has been confirmed, we evaluate its empirical realism by performing posterior predictive checks in which the distribution of data simulated from the posterior of the model is compared to the distribution of the data used to fit it. If there are no systematic discrepancies between the simulated and empirical data, the model can be considered a plausible representation of the real-world data generating process that is the subject of inference, justifying the ecological interpretation of parameter estimations.
+
+All data processing, modeling, and visualization were done in R [@R]. Data handling was done with the `tidyverse` suite of packages [@Wickham2019-aa]. Visualizations appearing in the main text of the manuscript were produced with the R packages `ggplot2` [@Wickham2016-aa], `tidybayes` [@Kay2020-aa], and `ggdist` [@Kay2021-aa].
+
+<!-- Finally, we compare a selection of our priors to the corresponding posteriors to ensure that the priors were appropriately broad. We deemed this step prudent for group-level slope and intercept priors and varying effect standard deviation priors, since these were less intuitive to specify than the priors for the global slope and intercept.    -->
+
+\newpage
+
+# Prepare environment
+```{r message=FALSE, warning=FALSE}
+# Attach packages
+library(brms) # a Stan front-end for Bayesian modeling
+library(tidyverse) # data handling
+
+# Optimize setting for Stan
+rstan::rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+# Load data
+meta_rich <- readRDS("../data/processed/meta_rich.rds") 
+meta_rich_predatory <- readRDS("../data/processed/meta_rich_predatory.rds") 
+meta_rich_granivorous <- readRDS("../data/processed/meta_rich_granivorous.rds") 
+meta_abund <- readRDS("../data/processed/meta_abund.rds")
+meta_abund_diet <- readRDS("../data/processed/meta_abund_diet.rds")
+meta_abund_size <- readRDS("../data/processed/meta_abund_size.rds")
+meta_CWM <- readRDS("../data/processed/meta_CWM.rds")
+size <- readRDS("../data/processed/size.rds")
+```
+
+# Specify priors
+
+In this section, we visualize the priors for each model and describe the reasoning behind our choices. Note that, in addition to the slope, intercept, and standard deviation parameters described below, our models also include correlation priors for varying effects (site nested in study), for which we use the weakly regularizing LKG distribution [lkg(1)] that `brms` [@Burkner2017-aa] uses as a default. Our gamma models (activity density) also include a shape parameter governing the gamma distribution. For this, which has no intuitive biological meaning, we replace the default flat prior with a very broad but proper N(0,2.5), since prior predictive simulation is only possible when all parameters have a proper (i.e. non-flat) prior.         
+
+## Richness
+
+### Global slope
+
+#### Distance
+
+The transformed slope coefficient is the factor by which species richness changes with every 100 m of distance from the field edge.  Could it double every 10 m? Maybe. Could it even quadruple? That seems unlikely, but we won't rule it out completely. We will aim for a prior that gets very skinny above 4 on the response scale. The left tail of our prior should allow values very close to zero (though zero itself is not possible, since an exponentiated distribution is zero-bounded). N(0, 0.75) seems reasonable. 
+
+```{r message=FALSE, warning=FALSE}
+slope_prior_richness <- 
+  # a range of parameter values imagined on the link scale
+  tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  # exponentiated parameter values, now interpreted as multiplier per unit x 
+  mutate(x_response = exp(x_link), 
+  # get probability densities
+         N.0_075 = dnorm(x_link, mean = 0, sd = 0.75)) %>%
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_prior_richness, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 10)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Richness ~ distance global prior (response scale)")
+```
+
+#### Trap-days
+
+The conditional effect of log.trap.days should always be positive. Perhaps we don't want to make it strictly zero-bounded, but we at least want the prior informatively centered above zero. On the response scale, that means above 1. It's about 1 x log(trap.days) when you go from 14 trapping days to 40 trapping days. It's roughly another 1 x log(trap.day) to go from 40 to 100. By what factor could we expect richness to increase over those intervals? A factor of 4 seems a reasonable upper extreme. N(0.5, 0.4) would be a reasonable prior.
+
+```{r message=FALSE, warning=FALSE}
+slope_prior_richness2 <- tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.05_04 = dnorm(x_link, mean = 0.5, sd = 0.4)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_prior_richness2, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 6)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Richness ~ trapping days prior (response scale)")
+```
+
+### Group-level slopes
+
+Each group-level slope parameter gets added (on the link scale) to the global slope parameter to get the slope for each group. So, these priors reflect how much each group can deviate from the reference level (crop = cereal, habitat = control). A prior of N(0, 0.75) gets skinny around +/- 2. Let's imagine a neutral global slope parameter of 0 on the link scale. A group-level parameter of 2 would mean a group-level slope of a 22% increase per 10 m. That's pretty dramatic. A group-level parameter of -2 would mean a slope of -18% per 10 m. That is also very steep. But perhaps differences of this magnitude are not impossible. We'll see how a prior of N(0, 0.75) performs in prior predictive checks.   
+
+```{r message=FALSE, warning=FALSE}
+slope_prior_richness3 <- tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_075 = dnorm(x_link, mean = 0, sd = 0.75)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_prior_richness3, aes(x_link, density)) +
+  geom_area(alpha = 0.5) +
+  #xlim(c(0, 6)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Richness ~ distance group-level prior (link scale)")
+```
+
+### Global intercept
+
+For the global intercept term (Intercept), we are setting a prior on the value of species richness when all variables are at their means or reference levels. In a log link model, setting a normal prior on the link scale will result in a strictly positive prior on the response scale, which works well for the log-link models we are fitting. We should set it off a bit from zero, though, since we do not want to favor extremely low species counts. It looks like N(2, 0.75) would be a very reasonable prior.
+
+```{r message=FALSE, warning=FALSE}
+intercept_prior_richness1 <- tibble(x_link = seq(-5, 8, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.02_075 = dnorm(x_link, mean = 2, sd = 0.75)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(intercept_prior_richness1, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 80)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Richness global intercept prior (response scale)")
+```
+
+### Group-level intercepts
+
+A for the group-level slope parameters, the group-level intercept parameters are added to the global parameter on the link scale. If we take a global intercept value from the fat part of the prior---let's say 2.5 on the link scale, ~12 species on the response scale---a group-level intercept parameter of 2 would mean 90 species. And -2 would mean < 2 species. This is tricky, because you can see how this will tend to explode on the upper end. But we don't want to constrain it too much on the lower end, since it's possible that a given group could have very low species richness. I think N(0, 0.75) is a reasonable start, but again we'll have to see how the prior predictive check goes.  
+
+
+```{r message=FALSE, warning=FALSE}
+intercept_prior_richness2 <- tibble(x_link = seq(-5, 8, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_075 = dnorm(x_link, mean = 0, sd = 0.75)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response),
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(intercept_prior_richness2, aes(x_link, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(-3, 3)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Richness group-level intercept prior (link scale)")
+```
+
+### SD for study/site varying effect
+
+These priors define the normal distribution, centered on the grand mean, from which the deviation of study and site are estimated. Because the distribution is centered on the mean, the model is skeptical of large deviations in studies/sites, as long as the sd prior is tight enough. We'll go with N(0, 1) as a reasonable starting place.
+
+```{r message=FALSE, warning=FALSE}
+sd_prior_richness1 <- tibble(x_link = seq(-5, 8, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_1 = dnorm(x_link, mean = 0, sd = 1)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(sd_prior_richness1, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 20)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Richness sd prior (response scale)")
+```
+
+## Activity density
+
+### Global slope
+
+As for richness, the task here is to choose a prior that allows realistic values for the factor by which activity density could increase per 100 m (since it is the upper bound, not the lower bound, that could destabilize the model). N(0, 0.75) seems a good place to start.
+
+```{r message=FALSE, warning=FALSE}
+slope_prior_ad <- 
+  # a range of parameter values imagined on the link scale
+  tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  # exponentiated parameter values, now interpreted as multiplier per unit x 
+  mutate(x_response = exp(x_link), 
+  # get probability densities
+         N.0_075 = dnorm(x_link, mean = 0, sd = 0.75)) %>%
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_prior_ad, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 10)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Activity density ~ distance global prior (response scale)")
+```
+
+### Group-level slopes
+
+For the group level terms, we are again setting a prior on the factor by which each group will differ from the global intercept. As in the richness model, we will use N(0, 0.75).
+
+```{r message=FALSE, warning=FALSE}
+slope_prior_ad2 <- tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_05 = dnorm(x_link, mean = 0, sd = 0.5)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_prior_ad2, aes(x_link, density)) +
+  geom_area(alpha = 0.5) +
+  #xlim(c(0, 6)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Activity density ~ distance group-level prior (link scale)")
+```
+
+### Global intercept
+
+For the global intercept term, we are setting a prior on the value of individuals caught per trapping day when all variables are at their means or reference levels. N(1,1) seems reasonable.
+
+```{r message=FALSE, warning=FALSE}
+intercept_prior_ad <- 
+  # a range of parameter values imagined on the link scale
+  tibble(x_link = seq(-3, 5, 0.01)) %>% 
+  # exponentiated parameter values, now interpreted as multiplier per unit x 
+  mutate(x_response = exp(x_link), 
+  # get probability densities
+         N.1_1 = dnorm(x_link, mean = 1, sd = 1)) %>%
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(intercept_prior_ad, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 50)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Activity global intercept prior (response scale)")
+```
+
+### Group-level intercept
+
+For activity density, we will use a somewhat tighter N(0, 0.5) prior for group-level intercepts, since this model tends to explode into very high predictions in the prior predictive check.
+
+```{r message=FALSE, warning=FALSE}
+intercept_prior_ad2 <- 
+  # a range of parameter values imagined on the link scale
+  tibble(x_link = seq(-3, 5, 0.01)) %>% 
+  # exponentiated parameter values, now interpreted as multiplier per unit x 
+  mutate(x_response = exp(x_link), 
+  # get probability densities
+         N.0_05 = dnorm(x_link, mean = 0, sd = 0.5)) %>%
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(intercept_prior_ad2, aes(x_link, density)) +
+  geom_area(alpha = 0.5) +
+  #xlim(c(0, 10)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Activity density group-level intercept prior (link scale)")
+```
+
+### SD for study/site varying effect
+
+For the standard deviation prior, we will again use N(0,1).
+
+```{r message=FALSE, warning=FALSE}
+sd_prior_ad1 <- tibble(x_link = seq(-5, 8, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_1 = dnorm(x_link, mean = 0, sd = 1)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(sd_prior_ad1, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 20)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("Activity density sd prior (response scale)")
+```
+
+<!-- ## Size -->
+
+<!-- ### Global slope -->
+
+<!-- The task here is to choose a prior that allows realistic values for the factor by which size changes per 100 m. The sizes range from near zero to near 30, so we should be generous with these priors. If, for whatever reason, only really big beetles live close to the edge and only really small beetles live in the middle, we could see like a 10-fold change. So, let's allow 10 and see how that goes. Realistically, I would expect the effect to be much smaller. N(0, 0.75) seems reasonable. -->
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+slope_priors_size <- tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_075 = dnorm(x_link, mean = 0, sd = 0.75)) %>% 
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_priors_size, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 10)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("CWM size ~ distance global prior (response scale)")
+```
+
+<!-- ### Group-level slopes -->
+
+<!-- As for the richness model, we will use N(0,0.75) for the group-level deviations from the global slope estimate. -->
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+slope_prior_size2 <- tibble(x_link = seq(-3, 3, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_075 = dnorm(x_link, mean = 0, sd = 0.75)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(slope_prior_size2, aes(x_link, density)) +
+  geom_area(alpha = 0.5) +
+  #xlim(c(0, 6)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("CWM size ~ distance group-level prior (link scale)")
+```
+
+<!-- ### Global intercept -->
+
+<!-- For the global intercept term (Intercept), we are setting a prior on community mean size when all variables are at their means or reference levels. We want a nice wide prior that covers 0-50 or so. N(2, 0.75) seems reasonable. -->
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+intercept_priors_size <- tibble(x_link = seq(-5, 5, 0.01)) %>% 
+  mutate(x_response = exp(x_link),
+         N.2_075 = dnorm(x_link, mean = 2, sd = 0.75)) %>% 
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+ggplot(intercept_priors_size, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("CWM size ~ distance group-level prior (link scale)")
+```
+
+<!-- ### Group-level intercepts -->
+
+<!-- As in the activity density models, we will use a somewhat tighter N(0, 0.5) prior to tame high predictions. -->
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+intercept_prior_size2 <- 
+  # a range of parameter values imagined on the link scale
+  tibble(x_link = seq(-3, 5, 0.01)) %>% 
+  # exponentiated parameter values, now interpreted as multiplier per unit x 
+  mutate(x_response = exp(x_link), 
+  # get probability densities
+         N.0_05 = dnorm(x_link, mean = 0, sd = 0.5)) %>%
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(intercept_prior_size2, aes(x_link, density)) +
+  geom_area(alpha = 0.5) +
+  #xlim(c(0, 10)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("CWM size group-level intercept prior (link scale)")
+```
+
+<!-- ### SD for study/site varying effect -->
+
+<!-- For the standard deviation prior, we will again use N(0,1). -->
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+sd_prior_size1 <- tibble(x_link = seq(-5, 8, 0.01)) %>% 
+  mutate(x_response = exp(x_link), 
+         N.0_1 = dnorm(x_link, mean = 0, sd = 1)) %>% 
+  
+  pivot_longer(cols = c(-x_link, -x_response), 
+               names_to = "prior", 
+               values_to = "density")
+
+# Plot
+ggplot(sd_prior_size1, aes(x_response, density)) +
+  geom_area(alpha = 0.5) +
+  xlim(c(0, 20)) +
+  labs(x = "Coefficient", y = "Probability density") +
+  theme_light() +
+  ggtitle("CWM size sd prior (response scale)")
+```
+
+# Call prior sets
+
+## Richness
+```{r message=FALSE, warning=FALSE}
+priors_rich00 <- c(prior(normal(0, 0.75),
+                          class = b,
+                          coef = distance100),
+                   prior(normal(0.5, 0.4),
+                          class = b,
+                          coef = log.trap.days),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolOilseed`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolVegetable`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolMaize`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolLegume`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:snh.typeherbaceous`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:snh.typewoody`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `crop.poolLegume`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `crop.poolMaize`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `crop.poolOilseed`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `crop.poolVegetable`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `snh.typeherbaceous`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `snh.typewoody`),
+                   prior(normal(2, 0.75),
+                         class = Intercept),
+                   prior(normal(0, 1),
+                         class = sd)
+                   )
+```
+
+## Activity density
+```{r message=FALSE, warning=FALSE}
+priors_abund00 <- c(prior(normal(0, 0.75),
+                          class = b,
+                          coef = distance100),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolOilseed`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolVegetable`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolMaize`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolLegume`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:snh.typeherbaceous`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:snh.typewoody`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolLegume`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolMaize`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolOilseed`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolVegetable`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `snh.typeherbaceous`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `snh.typewoody`),
+                   prior(normal(1, 1),
+                         class = Intercept),
+                   prior(normal(0, 2.5),
+                         class = shape),
+                   prior(normal(0, 1),
+                         class = sd)
+                   )
+```
+
+<!-- ## Size -->
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+priors_size00 <- c(prior(normal(0, 0.75),
+                          class = b,
+                          coef = distance100),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolOilseed`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolVegetable`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolMaize`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:crop.poolLegume`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:snh.typeherbaceous`),
+                   prior(normal(0, 0.75),
+                         class = b,
+                         coef = `distance100:snh.typewoody`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolLegume`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolMaize`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolOilseed`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `crop.poolVegetable`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `snh.typeherbaceous`),
+                   prior(normal(0, 0.5),
+                         class = b,
+                         coef = `snh.typewoody`),
+                   prior(normal(2, 0.75),
+                         class = Intercept),
+                   prior(normal(0, 2.5),
+                         class = shape),
+                   prior(normal(0, 1),
+                         class = sd)
+                   )
+```
+
+# Run prior predictive checks
+
+In a prior-predictive check, a model is run (i.e. sampled via HMC) using only its priors (i.e. its "joint prior," then high-dimensional space defined by its full prior set). This produces a posterior distribution just like running the model with data, but the posterior expresses only the information built into the model via its structure and its priors. It hasn't "learned" from the new empirical data yet. When we visualize the posterior distribution that results from sampling the joint prior, we should see that the bulk of the probability mass occupies plausible values. In this case, we will use a set of histograms that depicts 10 iterations of sampling from posterior along with the distribution of the empirical data that our model has not yet seen. Ideally, the distribution of values drawn from the posterior should be considerably broader then the distribution of the empirical data, but not so much broader than the model places a lot of probability density on regions parameter space that generate data that are implausible (e.g. there will never be 40,000 species of carabids at any distance from a field edge). 
+
+## Richness
+
+### Total
+This configuration still predicts huge values of richness sometimes, but it concentrates the probability density between 0 and 100 species, which is where we want it to be. 
+```{r message=FALSE, warning=FALSE}
+brm_rich_00_pp <- brm(richness ~
+                         distance100 +
+                         log.trap.days +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = poisson(link = "log"),
+                       prior = priors_rich00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = meta_rich)
+
+pp_check(brm_rich_00_pp, type = "hist", binwidth = 40) +
+  coord_cartesian(xlim = c(0, 100))
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+brm_rich_10_pp <- brm(richness ~
+                         distance100 +
+                         log.trap.days +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = poisson(link = "log"),
+                       prior = priors_rich00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = meta_rich_predatory)
+
+pp_check(brm_rich_10_pp, type = "hist", binwidth = 40) +
+  coord_cartesian(xlim = c(0, 100))
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+brm_rich_20_pp <- brm(richness ~
+                         distance100 +
+                         log.trap.days +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = poisson(link = "log"),
+                       prior = priors_rich00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = meta_rich_granivorous)
+
+pp_check(brm_rich_20_pp, type = "hist", binwidth = 40) +
+  coord_cartesian(xlim = c(0, 100))
+```
+
+## Activity density (total)
+### Total
+```{r message=FALSE, warning=FALSE}
+brm_abund_00_pp <- brm(abund.std ~
+                         distance100 +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = "hurdle_gamma",
+                       prior = priors_abund00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = meta_abund)
+
+pp_check(brm_abund_00_pp, type = "hist", binwidth = 5) +
+  coord_cartesian(xlim = c(0, 20))
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+brm_abund_10_pp <- brm(abund.std ~
+                         distance100 +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = "hurdle_gamma",
+                       prior = priors_abund00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = filter(meta_abund_diet, diet == "predatory"))
+
+pp_check(brm_abund_10_pp, type = "hist", binwidth = 10) +
+  coord_cartesian(xlim = c(0, 40))
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+brm_abund_20_pp <- brm(abund.std ~
+                         distance100 +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = "hurdle_gamma",
+                       prior = priors_abund00,
+                       iter = 2000,
+                       control = list(adapt_delta = 0.9), # trying to avoid a few DTs
+                       chains = 4,
+                       sample_prior = "only",
+                       data = filter(meta_abund_diet, diet == "granivorous"))
+
+pp_check(brm_abund_20_pp, type = "hist", binwidth = 10) +
+  coord_cartesian(xlim = c(0, 40))
+```
+
+### Small
+```{r message=FALSE, warning=FALSE}
+brm_abund_30_pp <- brm(abund.std ~
+                         distance100 +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = "hurdle_gamma",
+                       prior = priors_abund00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = filter(meta_abund_size, size.class == "small"))
+
+pp_check(brm_abund_30_pp, type = "hist", binwidth = 10) +
+  coord_cartesian(xlim = c(0, 40))
+```
+
+### Medium
+```{r message=FALSE, warning=FALSE}
+brm_abund_40_pp <- brm(abund.std ~
+                         distance100 +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = "hurdle_gamma",
+                       prior = priors_abund00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = filter(meta_abund_size, size.class == "medium"))
+
+pp_check(brm_abund_40_pp, type = "hist", binwidth = 10) +
+  coord_cartesian(xlim = c(0, 40))
+```
+
+### Large
+```{r message=FALSE, warning=FALSE}
+brm_abund_50_pp <- brm(abund.std ~
+                         distance100 +
+                         snh.type +
+                         crop.pool +
+                         distance100:snh.type +
+                         distance100:crop.pool +
+                         (1 + distance100 | study/site),
+                       family = "hurdle_gamma",
+                       prior = priors_abund00,
+                       iter = 2000,
+                       chains = 4,
+                       sample_prior = "only",
+                       data = filter(meta_abund_size, size.class == "large"))
+
+pp_check(brm_abund_50_pp, type = "hist", binwidth = 10) +
+  coord_cartesian(xlim = c(0, 40))
+```
+
+<!-- ## Size -->
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+brm_size_00_pp <- brm(mean.size ~ 
+                        distance100 +
+                        crop.pool + 
+                        snh.type + 
+                        distance100*crop.pool +
+                        distance100*snh.type +
+                        (1 + distance100 | study/site),
+                      family = Gamma(link = "log"),
+                      prior = priors_size00,
+                      iter = 2000,
+                      sample_prior = "only",
+                      data = size
+                      )
+
+pp_check(brm_size_00_pp, type = "hist", binwidth = 20) +
+  coord_cartesian(xlim = c(0, 100))
+```
+
+
+# Update models with data
+
+In this step, we simply add the data to the models already specified in our prior-predictive checks. Now, the resulting posterior will be informed by both the priors and the data. This process can take a long time, so we will load these previously sampled models from saved files.
+
+## Richness
+
+### Total
+```{r message=FALSE, warning=FALSE}
+brm_rich_00 <- update(brm_rich_00_pp, sample_prior = TRUE, file = "../output/brm_rich_00")
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+brm_rich_10 <- update(brm_rich_10_pp, sample_prior = TRUE, file = "../output/brm_rich_10")
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+brm_rich_20 <- update(brm_rich_20_pp, sample_prior = TRUE, file = "../output/brm_rich_20")
+```
+
+## Activity density 
+
+### Total
+```{r message=FALSE, warning=FALSE}
+brm_abund_00 <- update(brm_abund_00_pp, sample_prior = TRUE, file = "../output/brm_abund_00")
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+brm_abund_10 <- update(brm_abund_10_pp, sample_prior = TRUE, file = "../output/brm_abund_10")
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+brm_abund_20 <- update(brm_abund_20_pp, sample_prior = TRUE, file = "../output/brm_abund_20")
+```
+
+### Small
+```{r message=FALSE, warning=FALSE}
+brm_abund_30 <- update(brm_abund_30_pp, sample_prior = TRUE, file = "../output/brm_abund_30")
+```
+
+### Medium
+```{r message=FALSE, warning=FALSE}
+brm_abund_40 <- update(brm_abund_40_pp, sample_prior = TRUE, iter = 5000, file = "../output/brm_abund_40")
+```
+
+### Large
+```{r message=FALSE, warning=FALSE}
+brm_abund_50 <- update(brm_abund_50_pp, sample_prior = TRUE, iter = 5000, file = "../output/brm_abund_50")
+```
+
+<!-- ## Size -->
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+brm_size_00 <- update(brm_size_00_pp, sample_prior = TRUE, file = "../output/brm_size_00")
+```
+
+# Evaluate computational integrity 
+The `brms` package [@Burkner2017-aa] prints informative model summaries when a model object is called. What we are interested in here is the evaluation of the HMC algorithm found in the last three columns of each table. The Rhat value indicates whether sampling chains converged on a coherent posterior as opposed, for example, to getting stuck in different local optima. An Rhat very close to 1 means that chains converged successfully. Bulk- and tail-ESS describe the effective sample size associated with each parameter, which is a metric that corrects the absolute number of samples drawn by the HMC process for the degree of autocorrelation between samples. When ESS is too low, parameter estimates cannot be considered reliable. This triggers a warning printed at the bottom of the output when a model object is called Finally, divergent transitions are iterations of the sampling process that "break" the underlying logic of Hamiltonian Monte Carlo, typically due to very narrow geometry in the posterior that cannot be navigated effectively given the step size of the HMC algorithm. To the extent that divergent transitions occur during the sampling process, the HMC devolves to a mere random walk, and the posterior is not sampled informatively. Ideally, there should be no divergent transitions at all. Any divergent transitions will trigger a warning message at the bottom of the output when a model object is called.  
+
+## Richness
+
+### Total
+```{r message=FALSE, warning=FALSE}
+brm_rich_00
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+brm_rich_10
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+brm_rich_20
+```
+
+## Activity density
+
+### Total
+```{r message=FALSE, warning=FALSE}
+brm_abund_00
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+brm_abund_10
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+brm_abund_20
+```
+
+### Small
+```{r message=FALSE, warning=FALSE}
+brm_abund_30
+```
+
+### Medium
+```{r message=FALSE, warning=FALSE}
+brm_abund_40
+```
+
+### Large
+```{r message=FALSE, warning=FALSE}
+brm_abund_50
+```
+
+<!-- ## Size -->
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+brm_size_00
+```
+
+# Evaluate empirical realism via posterior predictive checking
+
+In a posterior predictive check, we simulate data by sampling from the posterior of a model. This expresses what the model "expects" to see in a new set of empirical data. The logic is similar to that of a prior-predictive check, except now our model has learned from the data. If the data-generating process has been captured reasonably by the model, data predicted from the posterior should be distributed similarly to the data used to fit the model (or, better yet, to a real new data set---but this is not usually available). We visualize the posterior predictive check by plotting draws from the posterior (light blue) over the distribution of the data used to fit the model (dark blue). Systematic deviations between the real and simulated data indicate that the model is not doing a good job of representing the real-world data-generating process.
+
+## Richness
+
+### Total
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_rich_00)
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_rich_10)
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_rich_20)
+```
+
+## Activity density
+
+### Total
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_abund_00)
+```
+
+### Predatory + omnivorous
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_abund_10)
+```
+
+### Granivorous
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_abund_20)
+```
+
+### Small
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_abund_30)
+```
+
+### Medium
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_abund_40)
+```
+
+### Large
+```{r message=FALSE, warning=FALSE}
+pp_check(brm_abund_50)
+```
+
+<!-- ## Size -->
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+pp_check(brm_size_00)
+```
+
+<!-- # Evaluate group-level priors -->
+<!-- ## Richness -->
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+plot(hypothesis(brm_rich_00, "distance100:crop.poolOilseed > 0"))
+plot(hypothesis(brm_rich_00, "distance100:crop.poolLegume > 0"))
+plot(hypothesis(brm_rich_00, "distance100:crop.poolVegetable > 0"))
+plot(hypothesis(brm_rich_00, "distance100:crop.poolMaize > 0"))
+plot(hypothesis(brm_rich_00, "distance100:snh.typeherbaceous > 0"))
+plot(hypothesis(brm_rich_00, "distance100:snh.typewoody > 0"))
+
+plot(hypothesis(brm_rich_00, "crop.poolOilseed > 0"))
+plot(hypothesis(brm_rich_00, "crop.poolLegume > 0"))
+plot(hypothesis(brm_rich_00, "crop.poolVegetable > 0"))
+plot(hypothesis(brm_rich_00, "crop.poolMaize > 0"))
+plot(hypothesis(brm_rich_00, "snh.typeherbaceous > 0"))
+plot(hypothesis(brm_rich_00, "snh.typewoody > 0"))
+
+plot(hypothesis(brm_rich_10, "distance100:crop.poolOilseed > 0"))
+plot(hypothesis(brm_rich_10, "distance100:crop.poolLegume > 0"))
+plot(hypothesis(brm_rich_10, "distance100:crop.poolVegetable > 0"))
+plot(hypothesis(brm_rich_10, "distance100:crop.poolMaize > 0"))
+plot(hypothesis(brm_rich_10, "distance100:snh.typeherbaceous > 0"))
+plot(hypothesis(brm_rich_10, "distance100:snh.typewoody > 0"))
+
+plot(hypothesis(brm_rich_10, "crop.poolOilseed > 0"))
+plot(hypothesis(brm_rich_10, "crop.poolLegume > 0"))
+plot(hypothesis(brm_rich_10, "crop.poolVegetable > 0"))
+plot(hypothesis(brm_rich_10, "crop.poolMaize > 0"))
+plot(hypothesis(brm_rich_10, "snh.typeherbaceous > 0"))
+plot(hypothesis(brm_rich_10, "snh.typewoody > 0"))
+```
+
+# References

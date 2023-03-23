@@ -1,0 +1,1495 @@
+---
+title: "Distance functions underlying natural enemy within-field distributions: assessing the effects of crop type and adjacent habitats"
+subtitle: "Appendix 4: Post-processing and visualization of parameter estimates"
+author: 
+  - Fabian A. Boetzl
+  - Douglas B. Sponsler  
+  - Matthias Albrecht
+  - Péter Batáry
+  - Klaus Birkhofer
+  - Michal Knapp
+  - Jochen Krauss
+  - Bea Maas
+  - Emily A. Martin
+  - Clélia Sirami
+  - Louis Sutter
+  - Colette Bertrand
+  - Aliette Bosem Baillod
+  - Gerard Bota
+  - Vincent Bretagnolle
+  - Lluís Brotons
+  - Thomas Frank
+  - Moritz Fusser
+  - David Giralt
+  - Ezequiel González
+  - Anouschka Hof
+  - Henryk Luka
+  - Ronan Marrec
+  - Michael A. Nash
+  - Katherina Ng
+  - Manuel Plantegenest
+  - Brigitte Poulin
+  - Gavin Siriwardena
+  - Teja Tscharntke
+  - Matthias Tschumi
+  - Aude Vialatte
+  - Laura Van Vooren
+  - Muhammad Zubair-Anjum
+  - Martin H. Entling
+  - Ingolf Steffan-Dewenter
+  - Jens Schirmel
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+date: "`r Sys.Date()`"
+bibliography: 
+  - references.bib
+---
+
+\newpage
+
+# Summary
+
+This appendix details the post-processing and visualization of model parameter estimates. Parameter estimates are marginalized using `emmeans` [@Lenth2021-aa] and visualized using `ggplot2` [@Wickham2016-aa] and `ggdist` [@Kay2021-aa]. We also present parameter *contrasts*, i.e. pairwise differences between parameters, such as the beta coefficients for different crops and habitats.
+
+\newpage
+
+# 1. Prepare environment  
+
+## Load packages
+
+\footnotesize  
+
+```{r message=FALSE, warning=FALSE}
+library(brms)
+library(emmeans)
+library(ggeffects)
+library(ggpubr)
+library(scales)
+library(ggh4x)
+library(bayesplot)
+library(flextable)
+library(sjPlot)
+library(tidybayes)
+library(ggdist)
+library(patchwork)
+library(kableExtra)
+library(grid)
+library(gridExtra)
+library(tidyverse)
+library(ggpp)
+```
+
+\normalsize
+
+## Load data and models
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+meta_rich             <- readRDS("../data/processed/meta_rich.rds")
+meta_rich_predatory   <- readRDS("../data/processed/meta_rich_predatory.rds")
+meta_rich_granivorous <- readRDS("../data/processed/meta_rich_granivorous.rds")
+meta_abund            <- readRDS("../data/processed/meta_abund.rds")
+meta_abund_diet       <- readRDS("../data/processed/meta_abund_diet.rds")
+meta_abund_size       <- readRDS("../data/processed/meta_abund_size.rds")
+meta_CWM              <- readRDS("../data/processed/meta_CWM.rds")
+
+size <- readRDS("../data/processed/size.rds")
+diet <- readRDS("../data/processed/diet.rds")
+
+brm_rich_00  <- readRDS("../output/brm_rich_00.rds")
+brm_rich_10  <- readRDS("../output/brm_rich_10.rds")
+brm_rich_20  <- readRDS("../output/brm_rich_20.rds")
+brm_abund_00 <- readRDS("../output/brm_abund_00.rds")
+brm_abund_10 <- readRDS("../output/brm_abund_10.rds")
+brm_abund_20 <- readRDS("../output/brm_abund_20.rds")
+brm_abund_30 <- readRDS("../output/brm_abund_30.rds")
+brm_abund_40 <- readRDS("../output/brm_abund_40.rds")
+brm_abund_50 <- readRDS("../output/brm_abund_50.rds")
+brm_size_00  <- readRDS("../output/brm_size_00.rds")
+```
+
+\normalsize
+
+## Define custom functions
+
+### Posterior tabulation
+
+\footnotesize  
+
+```{r message=FALSE, warning=FALSE}
+slope_tab <- function(mod, trapDays = FALSE) { 
+  
+ # Make this functional conditional on whether log.trap.days is included in the model
+  if(trapDays == TRUE) {
+    
+    mod %>%
+      # Spread draws from slope parameters
+      spread_draws(b_distance100, `b_distance100:crop.poolVegetable`,
+                   `b_distance100:crop.poolOilseed`, `b_distance100:crop.poolLegume`,
+                   `b_distance100:crop.poolMaize`, `b_distance100:snh.typeherbaceous`,
+                   `b_distance100:snh.typewoody`, b_log.trap.days) %>%
+      # Back transform from log-odds to proportions
+      mutate(Cereal = exp(b_distance100/10), # dividing by 10 puts us back on the 10 m scale
+             # interaction slopes combine additively with the reference level slope
+             Vegetable = exp((b_distance100/10) + (`b_distance100:crop.poolVegetable`/10)), 
+             Oilseed = exp((b_distance100/10) + (`b_distance100:crop.poolOilseed`/10)),
+             Legume = exp((b_distance100/10) + (`b_distance100:crop.poolLegume`/10)),
+             Maize = exp((b_distance100/10) + (`b_distance100:crop.poolMaize`/10)),
+             control = exp(b_distance100/10),
+             herbaceous = exp((b_distance100/10) + (`b_distance100:snh.typeherbaceous`/10)),
+             woody = exp((b_distance100/10) + (`b_distance100:snh.typewoody`/10)),
+             log.trap.days = exp(b_log.trap.days/10)) %>%
+      select(.chain, .iteration, .draw, Cereal, Vegetable, Oilseed, Legume,
+             Maize, control, woody, herbaceous, log.trap.days) %>%
+      # Add contrasts
+      mutate(crp.con.cereal_vegetable = Cereal - Vegetable,
+             crp.con.cereal_oilseed = Cereal - Oilseed,
+             crp.con.cereal_legume = Cereal - Legume,
+             crp.con.cereal_maize = Cereal - Maize,
+             crp.con.vegetable_oilseed = Vegetable - Oilseed,
+             crp.con.vegetable_legume = Vegetable - Legume,
+             crp.con.vegetable_maize = Vegetable - Maize,
+             crp.con.oilseed_legume = Oilseed - Legume,
+             crp.con.oilseed_maize = Oilseed - Maize,
+             crp.con.legume_maize = Legume - Maize,
+             sh.con.control_herbaceous = control - herbaceous,
+             sh.con.control_woody = control - woody,
+             sh.con.herbaceous_woody = herbaceous - woody) %>%
+      pivot_longer(cols = -c(.chain, .iteration, .draw), 
+                   values_to = "coef", names_to = "par") %>%
+      # Group parameters into classes
+      mutate(class = case_when(
+        par %in% c("Cereal", "Vegetable", "Oilseed", "Legume", "Maize") ~ "crop",
+        par %in% c("control", "herbaceous", "woody") ~ "habitat",
+        grepl("crp.con", par) ~ "crop.contrast",
+        grepl("sh.con", par) ~ "habitat.contrast",
+        grepl("trap", par) ~ "trapping.days",
+      ))
+  }
+  
+  else{
+    mod %>%
+      # Spread draws from slope parameters
+      spread_draws(b_distance100, `b_distance100:crop.poolVegetable`,
+                   `b_distance100:crop.poolOilseed`, `b_distance100:crop.poolLegume`,
+                   `b_distance100:crop.poolMaize`, `b_distance100:snh.typeherbaceous`,
+                   `b_distance100:snh.typewoody`) %>%
+      # Back transform from log-odds to proportions
+      mutate(Cereal = exp(b_distance100/10),
+             Vegetable = exp((b_distance100/10) + (`b_distance100:crop.poolVegetable`/10)),
+             Oilseed = exp((b_distance100/10) + (`b_distance100:crop.poolOilseed`/10)),
+             Legume = exp((b_distance100/10) + (`b_distance100:crop.poolLegume`/10)),
+             Maize = exp((b_distance100/10) + (`b_distance100:crop.poolMaize`/10)),
+             control = exp(b_distance100/10),
+             herbaceous = exp((b_distance100/10) + (`b_distance100:snh.typeherbaceous`/10)),
+             woody = exp((b_distance100/10) + (`b_distance100:snh.typewoody`/10))) %>%
+      select(.chain, .iteration, .draw, Cereal, Vegetable, Oilseed, Legume, 
+             Maize, control, woody, herbaceous) %>%
+      # Add contrasts
+      mutate(crp.con.cereal_vegetable = Cereal - Vegetable,
+             crp.con.cereal_oilseed = Cereal - Oilseed,
+             crp.con.cereal_legume = Cereal - Legume,
+             crp.con.cereal_maize = Cereal - Maize,
+             crp.con.vegetable_oilseed = Vegetable - Oilseed,
+             crp.con.vegetable_legume = Vegetable - Legume,
+             crp.con.vegetable_maize = Vegetable - Maize,
+             crp.con.oilseed_legume = Oilseed - Legume,
+             crp.con.oilseed_maize = Oilseed - Maize,
+             crp.con.legume_maize = Legume - Maize,
+             sh.con.control_herbaceous = control - herbaceous,
+             sh.con.control_woody = control - woody,
+             sh.con.herbaceous_woody = herbaceous - woody) %>%
+      pivot_longer(cols = -c(.chain, .iteration, .draw), 
+                   values_to = "coef", names_to = "par") %>%
+      # Group parameters into classes
+      mutate(class = case_when(
+        par %in% c("Cereal", "Vegetable", "Oilseed", "Legume", "Maize") ~ "crop",
+        par %in% c("control", "herbaceous", "woody") ~ "habitat",
+        grepl("crp.con", par) ~ "crop.contrast",
+        grepl("sh.con", par) ~ "habitat.contrast"
+      ))
+  }
+}
+
+intercept_tab <- function(mod) {
+
+  mod %>%
+    # Spread draws from intercept parameters
+    spread_draws(b_Intercept, `b_crop.poolVegetable`,
+                 `b_crop.poolOilseed`, `b_crop.poolLegume`,
+                 `b_crop.poolMaize`, `b_snh.typeherbaceous`,
+                 `b_snh.typewoody`) %>%
+    # Back transform to response scale
+    mutate(Cereal = exp(b_Intercept),
+           Vegetable = exp(`b_crop.poolVegetable` + b_Intercept),
+           Oilseed = exp(`b_crop.poolOilseed` + b_Intercept),
+           Legume = exp(`b_crop.poolLegume` + b_Intercept),
+           Maize = exp(`b_crop.poolMaize` + b_Intercept),
+           control = exp(b_Intercept),
+           herbaceous = exp(`b_snh.typeherbaceous` + b_Intercept),
+           woody = exp(`b_snh.typewoody` + b_Intercept)) %>%
+    select(.chain, .iteration, .draw, Cereal, Vegetable, Oilseed, Legume, 
+           Maize, control, woody, herbaceous) %>%
+    # Add contrasts
+    mutate(crp.con.cereal_vegetable = Cereal - Vegetable,
+           crp.con.cereal_oilseed = Cereal - Oilseed,
+           crp.con.cereal_legume = Cereal - Legume,
+           crp.con.cereal_maize = Cereal - Maize,
+           crp.con.vegetable_oilseed = Vegetable - Oilseed,
+           crp.con.vegetable_legume = Vegetable - Legume,
+           crp.con.vegetable_maize = Vegetable - Maize,
+           crp.con.oilseed_legume = Oilseed - Legume,
+           crp.con.oilseed_maize = Oilseed - Maize,
+           crp.con.legume_maize = Legume - Maize,
+           sh.con.control_herbaceous = control - herbaceous,
+           sh.con.control_woody = control - woody,
+           sh.con.herbaceous_woody = herbaceous - woody) %>%
+    pivot_longer(cols = -c(.chain, .iteration, .draw),
+                 values_to = "coef", names_to = "par") %>%
+    mutate(class = case_when(
+      par %in% c("Cereal", "Vegetable", "Oilseed", "Legume", "Maize") ~ "crop",
+      par %in% c("control", "herbaceous", "woody") ~ "habitat",
+      grepl("crp.con", par) ~ "crop.contrast",
+      grepl("sh.con", par) ~ "habitat.contrast"
+    ))
+}
+
+## Spread draws for b_Intercept and r_study (Intercept)
+var_eff_tab_int <- function(mod, var) {
+  
+  if(var == "study") {
+    mod %>%
+      spread_draws(b_Intercept, r_study[condition, term]) %>% # draw b_Intercept and r_study
+      filter(term == "Intercept") %>% # drop the slope term of r_study
+      # sum b_Intercept and r_study and calculate credible intervals
+      median_qi(condition_mean = b_Intercept + r_study, .width = c(0.95, 0.66)) %>% 
+      mutate(condition_mean = exp(condition_mean), # back-transform to response scale
+             .lower = exp(.lower),
+             .upper = exp(.upper))
+    }
+  
+  else{
+    if(var == "site") {
+      mod %>%
+        spread_draws(b_Intercept, `r_study:site`[condition, term]) %>% # draw b_Intercept and r_study
+        filter(term == "Intercept") %>% # drop the slope term of r_study
+        median_qi(condition_mean = b_Intercept + `r_study:site`, .width = c(0.95, 0.66)) %>% 
+        mutate(condition_mean = exp(condition_mean), # back-transform to response scale
+               .lower = exp(.lower),
+               .upper = exp(.upper))
+    }
+    }
+  }
+
+
+## Spread draws for b_distance100 and r_study (Intercept)
+var_eff_tab_slope <- function(mod, var) {
+  
+  if(var == "study"){
+    mod %>%
+      spread_draws(b_distance100, r_study[condition, term]) %>% # draw b_Intercept and r_study
+      filter(term == "distance100") %>% # drop the slope term of r_study
+      # sum b_distance100 and r_study, rescale to 10 m units, and calculate credible intervals
+      median_qi(slope = (b_distance100/10) + (r_study/10), .width = c(0.95, 0.66)) %>% 
+      mutate(slope = exp(slope), # back-transform to response scale 
+             .lower = exp(.lower),
+             .upper = exp(.upper))
+  }
+  
+  else{
+    if(var == "site") {
+      mod %>%
+        spread_draws(b_distance100, `r_study:site`[condition, term]) %>% # draw b_Intercept and r_study
+        filter(term == "distance100") %>% # drop the slope term of r_study
+        median_qi(slope = (b_distance100/10) + (`r_study:site`/10), .width = c(0.95, 0.66)) %>% 
+        mutate(slope = exp(slope), # back-transform to response scale and rescale to 10 m units
+               .lower = exp(.lower),
+               .upper = exp(.upper))
+    }
+  }
+}
+```
+
+\normalsize
+
+### Plotting functions
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+## Plot conditional intercept by study
+# I got some help with the plotting code here: 
+# https://discourse.mc-stan.org/t/convenience-function-for-plotting-random-group-effects/13461
+
+var_eff_plot_int <- function(mod, x) {
+  
+  # Get inverse link function
+  invlink <- mod$family$linkinv
+  
+  ggplot(x, aes(y = reorder(condition, condition_mean), 
+                x = condition_mean, 
+                xmin = .lower, 
+                xmax = .upper)) +
+    geom_vline(xintercept = invlink( # back-transform...
+      fixef(mod, probs = c(0.05, 0.95))[1, 1]), # ...grand mean estimate
+      color = "#F8766D", size = 1) +
+    geom_vline(xintercept = invlink( # back-transform...
+      fixef(mod, probs = c(0.05, 0.95))[1, 3:4]), # ...grand mean 5 and 95% CI
+      color = "#F8766D", linetype = 2) +
+    geom_pointinterval() +
+    labs(x = "Intercept", y = "Study") +
+    theme_light() +
+    theme(panel.grid = element_blank(),
+          axis.text.y  = element_text(hjust = 0))
+}
+
+## Plot conditional response to distance by study
+var_eff_plot_slope <- function(mod, x) {
+  
+  # Get inverse link function
+  invlink <- mod$family$linkinv
+  
+  ggplot(x, aes(y = reorder(condition, slope), 
+                x = slope, 
+                xmin = .lower, 
+                xmax = .upper)) +
+    geom_pointinterval() +
+    geom_vline(xintercept = invlink(
+      (fixef(mod, probs = c(0.05, 0.95))[2, 1])/10), 
+      color = "#F8766D", size = 1) +
+    geom_vline(xintercept = invlink(
+      (fixef(mod, probs = c(0.05, 0.95))[2, 3:4])/10),
+      color = "#F8766D", linetype = 2) +
+    geom_pointinterval() +
+    theme_light() +
+    theme(panel.grid   = element_blank(),
+          axis.text.y  = element_text(hjust = 0)) +
+    labs(x = "Slope", y = "Study")
+}
+```
+
+\normalsize
+
+### Model tabulation
+
+\footnotesize 
+
+```{r message=FALSE, warning=FALSE}
+model_tab <- function(mod, x1, x2, title) {
+  # Tabulate slope parameter summaries
+  t1 <- x1 %>%
+    group_by(par, class) %>%
+    median_qi(coef) %>%
+    filter(class %in% c("crop", "habitat", "trapping.days")) %>%
+    select(Parameter = par, Estimate = coef, lower95 = .lower, upper95 = .upper) %>%
+    mutate(Parameter = case_when(
+      Parameter == "log.trap.days" ~ "log.trap.days",
+      Parameter == "Cereal" ~ "crop.cereal",
+      Parameter == "Legume" ~ "crop.legume",
+      Parameter == "Oilseed" ~ "crop.oilseed",
+      Parameter == "Vegetable" ~ "crop.vegetable",
+      Parameter == "Maize" ~ "crop.maize",
+      Parameter == "control" ~ "adj.control",
+      Parameter == "woody" ~ "adj.woody",
+      Parameter == "herbaceous" ~ "adj.herb")) %>%
+    mutate(Group = rep("Slope", n()),
+           Class = rep("Fixed", n())) %>%
+    arrange(Parameter)
+  
+  # Tabulate intercept parameter summaries
+  t2 <- x2 %>%
+    group_by(par, class) %>%
+    median_qi(coef) %>%
+    filter(class %in% c("crop", "habitat")) %>%
+    select(Parameter = par, Estimate = coef, lower95 = .lower, upper95 = .upper) %>%
+    mutate(Parameter = case_when(
+      Parameter == "Cereal" ~ "crop.cereal",
+      Parameter == "Legume" ~ "crop.legume",
+      Parameter == "Oilseed" ~ "crop.oilseed",
+      Parameter == "Vegetable" ~ "crop.vegetable",
+      Parameter == "Maize" ~ "crop.maize",
+      Parameter == "control" ~ "adj.control",
+      Parameter == "woody" ~ "adj.woody",
+      Parameter == "herbaceous" ~ "adj.herb")) %>%
+    mutate(Group = rep("Intercept", n()),
+           Class = rep("Fixed", n())) %>%
+    arrange(Parameter)
+  
+  # Tabulate standard deviation of study varying effect
+  t3 <- summary(mod)$random[[1]] %>%
+    as.data.frame()  %>% # convert to data frame
+    rownames_to_column(var = "Parameter") %>% 
+    as_tibble() %>%
+    select(Parameter, Estimate, lower95 = `l-95% CI`, upper95 = `u-95% CI`) %>%
+    mutate(Parameter = case_when(
+      Parameter == "sd(Intercept)" ~ "sd.intercept",
+      Parameter == "sd(distance100)" ~ "sd.distance",
+      Parameter == "cor(Intercept,distance100)" ~ "cor.intercept:distance"
+      )) %>%
+    mutate(Group = rep("Study", n()),
+           Class = rep("Varying", n())) %>%
+    arrange(Parameter)
+  
+  # Tabulate standard deviation of study:site varying effect
+  t4 <- summary(mod)$random[[2]] %>%
+    as.data.frame()  %>% # convert to data frame
+    rownames_to_column(var = "Parameter") %>% 
+    as_tibble() %>%
+    select(Parameter, Estimate, lower95 = `l-95% CI`, upper95 = `u-95% CI`) %>%
+    mutate(Parameter = case_when(
+      Parameter == "sd(Intercept)" ~ "sd.intercept",
+      Parameter == "sd(distance100)" ~ "sd.distance",
+      Parameter == "cor(Intercept,distance100)" ~ "cor.intercept:distance"
+      )) %>%
+    mutate(Group = rep("Study:site", n()),
+           Class = rep("Varying", n())) %>%
+    arrange(Parameter)
+  
+  # Tabulate R2
+  t5 <- bayes_R2(mod, probs = c(0.05, 0.95)) %>%
+    as.data.frame()  %>% # convert to data frame
+    rownames_to_column(var = "Parameter") %>% 
+    as_tibble() %>%
+    select(Parameter, Estimate, lower95 = Q5, upper95 = Q95) %>%
+    mutate(Group = rep("", n()),
+           Class = rep("Summary", n())) %>%
+    arrange(Parameter)
+
+  # Bind into single table and convert to flextable
+  t.out <- bind_rows(t1, t2, t3, t4, t5) %>%
+    select(Class, Group, Parameter, Estimate, lower95, upper95) %>%
+    mutate(Estimate = round(Estimate, 3),
+           lower95 = round(lower95, 3),
+           upper95 = round(upper95, 3)) %>%
+    flextable() %>%
+    merge_v(j = c("Class", "Group")) %>%
+    valign(j = c("Class", "Group"), valign = "top") %>%
+    fontsize(size = 8) %>%
+    autofit() %>%
+    set_caption(
+      title,
+      style = "Table Caption",
+      html_escape = TRUE
+      )
+}
+```
+
+\normalsize
+
+### MCMC extraction from emmeans object
+
+\footnotesize 
+
+```{r message=FALSE, warning=FALSE}
+# Marginalized across all crops and habitats
+get_mcmc <- function(x, name) {
+  
+  m <- as.mcmc(x) %>% # extract MCMC chains
+    map(as_tibble) %>% # convert list items to tibbles
+    bind_rows() %>% # collapse list into single table
+    pivot_longer(cols = everything(), names_to = "level", values_to = "slope_link100") %>%
+    mutate(slope_link10 = slope_link100/10) %>% # rescale to 10-meter units
+    mutate(slope_response = exp(slope_link10)) %>% # exponentiate to get back to response scale
+    mutate(model= name) %>%
+    select(-c(1))
+}
+
+# Marginalized by crop across habitat
+get_mcmc.c <- function(x, name) {
+
+  m <- as.mcmc(x) %>% 
+    map(as_tibble) %>% 
+    bind_rows() %>% 
+    pivot_longer(cols = everything(), names_to = "level", values_to = "slope_link100") %>%
+    mutate(slope_link10 = slope_link100/10) %>% 
+    mutate(slope_response = exp(slope_link10)) %>% 
+    mutate(model= name, class = 'crop') %>%
+    mutate(par = case_when(level %in% c("crop.pool Cereal") ~ "Cereal", 
+                             level %in% c("crop.pool Oilseed") ~ "Oilseed", 
+                             level %in% c("crop.pool Legume") ~ "Legume", 
+                             level %in% c("crop.pool Maize") ~ "Maize", 
+                             level %in% c("crop.pool Vegetable") ~ "Vegetable"))
+}
+
+# Marginalized by habitat across crop
+get_mcmc.h <- function(x, name) {
+
+  m <- as.mcmc(x) %>% 
+    map(as_tibble) %>% 
+    bind_rows() %>% 
+    pivot_longer(cols = everything(), names_to = "level", values_to = "slope_link100") %>%
+    mutate(slope_link10 = slope_link100/10) %>% 
+    mutate(slope_response = exp(slope_link10)) %>% 
+    mutate(model= name, class = 'habitat') %>%
+    mutate(par = case_when(level %in% c("snh.type control") ~ "control", 
+                           level %in% c("snh.type woody") ~ "woody", 
+                           level %in% c("snh.type herbaceous") ~ "herbaceous"))
+}
+```
+
+\normalsize
+
+# Extract parameter estimates
+
+## Tabulate posterior draws
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+# Richness
+brm_rich_00_slope_parameters <- slope_tab(brm_rich_00, trapDays = TRUE) %>%
+  mutate(model = "01_brm_rich_00")
+
+brm_rich_00_intercept_parameters <- intercept_tab(brm_rich_00) %>%
+  mutate(model = "01_brm_rich_00")
+
+brm_rich_00_studyslope_parameters <- var_eff_tab_slope(brm_rich_00, "study")
+
+brm_rich_00_studyint_parameters <- var_eff_tab_int(brm_rich_00, "study")
+
+brm_rich_00_siteslope_parameters <- var_eff_tab_slope(brm_rich_00, "site")
+
+brm_rich_00_siteint_parameters <- var_eff_tab_int(brm_rich_00, "site")
+
+
+# Richness (predatory)
+brm_rich_10_slope_parameters <- slope_tab(brm_rich_10, trapDays = TRUE) %>%
+  mutate(model = "02_brm_rich_10")
+
+brm_rich_10_intercept_parameters <- intercept_tab(brm_rich_10) %>%
+  mutate(model = "02_brm_rich_10")
+
+brm_rich_10_studyslope_parameters <- var_eff_tab_slope(brm_rich_10, "study")
+
+brm_rich_10_studyint_parameters <- var_eff_tab_int(brm_rich_10, "study")
+
+brm_rich_10_siteslope_parameters <- var_eff_tab_slope(brm_rich_10, "site")
+
+brm_rich_10_siteint_parameters <- var_eff_tab_int(brm_rich_10, "site")
+
+
+# Richness (granivorous)
+brm_rich_20_slope_parameters <- slope_tab(brm_rich_20, trapDays = TRUE) %>%
+  mutate(model = "03_brm_rich_20")
+
+brm_rich_20_intercept_parameters <- intercept_tab(brm_rich_20) %>%
+  mutate(model = "03_brm_rich_20")
+
+brm_rich_20_studyslope_parameters <- var_eff_tab_slope(brm_rich_20, "study")
+
+brm_rich_20_studyint_parameters <- var_eff_tab_int(brm_rich_20, "study")
+
+brm_rich_20_siteslope_parameters <- var_eff_tab_slope(brm_rich_20, "site")
+
+brm_rich_20_siteint_parameters <- var_eff_tab_int(brm_rich_20, "site")
+
+
+# Activity density
+brm_abund_00_slope_parameters <- slope_tab(brm_abund_00, trapDays = FALSE) %>%
+  mutate(model = "04_brm_abund_00")
+
+brm_abund_00_intercept_parameters <- intercept_tab(brm_abund_00) %>%
+  mutate(model = "04_brm_abund_00")
+
+brm_abund_00_studyslope_parameters <- var_eff_tab_slope(brm_abund_00, "study")
+
+brm_abund_00_studyint_parameters <- var_eff_tab_int(brm_abund_00, "study")
+
+brm_abund_00_siteslope_parameters <- var_eff_tab_slope(brm_abund_00, "site")
+
+brm_abund_00_siteint_parameters <- var_eff_tab_int(brm_abund_00, "site")
+
+
+# Activity density (predatory)
+brm_abund_10_slope_parameters <- slope_tab(brm_abund_10, trapDays = FALSE) %>%
+  mutate(model = "05_brm_abund_10")
+
+brm_abund_10_intercept_parameters <- intercept_tab(brm_abund_10) %>%
+  mutate(model = "05_brm_abund_10")
+
+brm_abund_10_studyslope_parameters <- var_eff_tab_slope(brm_abund_10, "study")
+
+brm_abund_10_studyint_parameters <- var_eff_tab_int(brm_abund_10, "study")
+
+brm_abund_10_siteslope_parameters <- var_eff_tab_slope(brm_abund_10, "site")
+
+brm_abund_10_siteint_parameters <- var_eff_tab_int(brm_abund_10, "site")
+
+
+# Activity density (granivorous)
+brm_abund_20_slope_parameters <- slope_tab(brm_abund_20, trapDays = FALSE) %>%
+  mutate(model = "06_brm_abund_20")
+
+brm_abund_20_intercept_parameters <- intercept_tab(brm_abund_20) %>%
+  mutate(model = "06_brm_abund_20")
+
+brm_abund_20_studyslope_parameters <- var_eff_tab_slope(brm_abund_20, "study")
+
+brm_abund_20_studyint_parameters <- var_eff_tab_int(brm_abund_20, "study")
+
+brm_abund_20_siteslope_parameters <- var_eff_tab_slope(brm_abund_20, "site")
+
+brm_abund_20_siteint_parameters <- var_eff_tab_int(brm_abund_20, "site")
+
+
+# Activity density (small)
+brm_abund_30_slope_parameters <- slope_tab(brm_abund_30, trapDays = FALSE) %>%
+  mutate(model = "07_brm_abund_30")
+
+brm_abund_30_intercept_parameters <- intercept_tab(brm_abund_30) %>%
+  mutate(model = "07_brm_abund_30")
+
+brm_abund_30_studyslope_parameters <- var_eff_tab_slope(brm_abund_30, "study")
+
+brm_abund_30_studyint_parameters <- var_eff_tab_int(brm_abund_30, "study")
+
+brm_abund_30_siteslope_parameters <- var_eff_tab_slope(brm_abund_30, "site")
+
+brm_abund_30_siteint_parameters <- var_eff_tab_int(brm_abund_30, "site")
+
+
+# Activity density (medium)
+brm_abund_40_slope_parameters <- slope_tab(brm_abund_40, trapDays = FALSE) %>%
+  mutate(model = "08_brm_abund_40")
+
+brm_abund_40_intercept_parameters <- intercept_tab(brm_abund_40) %>%
+  mutate(model = "08_brm_abund_40")
+
+brm_abund_40_studyslope_parameters <- var_eff_tab_slope(brm_abund_40, "study")
+
+brm_abund_40_studyint_parameters <- var_eff_tab_int(brm_abund_40, "study")
+
+brm_abund_40_siteslope_parameters <- var_eff_tab_slope(brm_abund_40, "site")
+
+brm_abund_40_siteint_parameters <- var_eff_tab_int(brm_abund_40, "site")
+
+
+# Activity density (large)
+brm_abund_50_slope_parameters <- slope_tab(brm_abund_50, trapDays = FALSE) %>%
+  mutate(model = "09_brm_abund_50")
+
+brm_abund_50_intercept_parameters <- intercept_tab(brm_abund_50) %>%
+  mutate(model = "09_brm_abund_50")
+
+brm_abund_50_studyslope_parameters <- var_eff_tab_slope(brm_abund_50, "study")
+
+brm_abund_50_studyint_parameters <- var_eff_tab_int(brm_abund_50, "study")
+
+brm_abund_50_siteslope_parameters <- var_eff_tab_slope(brm_abund_50, "site")
+
+brm_abund_50_siteint_parameters <- var_eff_tab_int(brm_abund_50, "site")
+
+
+# Size
+brm_size_00_slope_parameters <- slope_tab(brm_size_00, trapDays = FALSE) %>%
+  mutate(model = "10_brm_size_00")
+
+brm_size_00_intercept_parameters <- intercept_tab(brm_size_00) %>%
+  mutate(model = "10_brm_size_00")
+
+brm_size_00_studyslope_parameters <- var_eff_tab_slope(brm_size_00, "study")
+
+brm_size_00_studyint_parameters <- var_eff_tab_int(brm_size_00, "study")
+
+brm_size_00_siteslope_parameters <- var_eff_tab_slope(brm_size_00, "site")
+
+brm_size_00_siteint_parameters <- var_eff_tab_int(brm_size_00, "site")
+
+
+# Merge slope parameters
+slope_parameters1 <- bind_rows(brm_rich_00_slope_parameters,
+                               brm_abund_10_slope_parameters,
+                               brm_abund_20_slope_parameters,
+                               brm_size_00_slope_parameters) %>%
+  mutate(model = factor(model, levels = c("01_brm_rich_00", "05_brm_abund_10",
+                                          "06_brm_abund_20", "10_brm_size_00"))) %>%
+  mutate(par = tolower(par))
+
+
+slope_parameters1.5 <- bind_rows(brm_rich_00_slope_parameters,
+                                 brm_rich_10_slope_parameters,
+                                 brm_rich_20_slope_parameters,
+                                 brm_abund_00_slope_parameters,
+                                 brm_abund_10_slope_parameters,
+                                 brm_abund_20_slope_parameters,
+                                 brm_size_00_slope_parameters) %>%
+  mutate(model = factor(model, levels = c("01_brm_rich_00","02_brm_rich_10", 
+                                          "03_brm_rich_20","04_brm_abund_00", 
+                                          "05_brm_abund_10", "06_brm_abund_20", 
+                                          "10_brm_size_00"))) %>%
+  mutate(par = tolower(par))
+
+
+slope_parameters2 <- bind_rows(brm_rich_10_slope_parameters,
+                               brm_rich_20_slope_parameters,
+                               brm_abund_00_slope_parameters,
+                               brm_abund_30_slope_parameters,
+                               brm_abund_40_slope_parameters,
+                               brm_abund_50_slope_parameters) %>%
+  mutate(model = factor(model, levels = c("02_brm_rich_10", "03_brm_rich_20",
+                                          "04_brm_abund_00", "07_brm_abund_30",
+                                          "08_brm_abund_40", "09_brm_abund_50"))) %>%
+  mutate(par = tolower(par))
+
+
+
+slope_parameters2.5 <- bind_rows(brm_abund_30_slope_parameters,
+                               brm_abund_40_slope_parameters,
+                               brm_abund_50_slope_parameters) %>%
+  mutate(model = factor(model, levels = c("07_brm_abund_30", "08_brm_abund_40", 
+                                          "09_brm_abund_50"))) %>%
+  mutate(par = tolower(par))
+```
+
+```{r include=FALSE}
+# Free up memory
+gc()
+```
+
+\normalsize
+
+## Print tabular model summaries
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+model_tab(brm_rich_00, 
+          brm_rich_00_slope_parameters,
+          brm_rich_00_intercept_parameters,
+          "Richness") 
+
+model_tab(brm_rich_10, 
+          brm_rich_10_slope_parameters,
+          brm_rich_10_intercept_parameters,
+          "Richness (predatory + omnivorous)")
+
+model_tab(brm_rich_20, 
+          brm_rich_20_slope_parameters,
+          brm_rich_20_intercept_parameters,
+          "Richness (granivorous)")
+  
+model_tab(brm_abund_00, 
+          brm_abund_00_slope_parameters,
+          brm_abund_00_intercept_parameters,
+          "Activity density (total)")
+
+model_tab(brm_abund_10, 
+          brm_abund_10_slope_parameters,
+          brm_abund_10_intercept_parameters,
+          "Activity density (predatory + omnivorous)")
+
+model_tab(brm_abund_20, 
+          brm_abund_20_slope_parameters,
+          brm_abund_20_intercept_parameters,
+          "Activity density (granivorous)") 
+
+model_tab(brm_abund_30, 
+          brm_abund_30_slope_parameters,
+          brm_abund_30_intercept_parameters,
+          "Activity density (small)") 
+
+model_tab(brm_abund_40, 
+          brm_abund_40_slope_parameters,
+          brm_abund_40_intercept_parameters,
+          "Activity density (medium)") 
+
+model_tab(brm_abund_50, 
+          brm_abund_50_slope_parameters,
+          brm_abund_50_intercept_parameters,
+          "Activity density (large)") 
+
+model_tab(brm_size_00, 
+          brm_size_00_slope_parameters,
+          brm_size_00_intercept_parameters,
+          "CWM Size")
+```
+
+\normalsize
+
+## Create emtrends objects
+
+\footnotesize 
+
+```{r message=FALSE, warning=FALSE}
+# Marginalized across all crops and habitats
+emt_rich_00 <- emtrends(brm_rich_00,
+                        var = "distance100", 
+                        ci.lvl = 0.95)
+
+emt_rich_00d <- emtrends(brm_rich_00, 
+                         var = "log.trap.days", 
+                         ci.lvl = 0.95)
+
+emt_rich_10 <- emtrends(brm_rich_10, 
+                        var = "distance100", 
+                        ci.lvl = 0.95)
+
+emt_rich_20 <- emtrends(brm_rich_20, 
+                        var = "distance100", 
+                        ci.lvl = 0.95)
+
+emt_abund_00 <- emtrends(brm_abund_00, 
+                         var = "distance100", 
+                         ci.lvl = 0.95)
+
+emt_abund_10 <- emtrends(brm_abund_10, 
+                         var = "distance100", 
+                         ci.lvl = 0.95)
+
+emt_abund_20 <- emtrends(brm_abund_20, 
+                         var = "distance100", 
+                         ci.lvl = 0.95)
+
+emt_abund_30 <- emtrends(brm_abund_30, 
+                         var = "distance100", 
+                         ci.lvl = 0.95)
+
+emt_abund_40 <- emtrends(brm_abund_40, 
+                         var = "distance100", 
+                         ci.lvl = 0.95)
+
+emt_abund_50 <- emtrends(brm_abund_50, 
+                         var = "distance100", 
+                         ci.lvl = 0.95)
+
+emt_size_00 <- emtrends(brm_size_00, 
+                        var = "distance100", 
+                        ci.lvl = 0.95)
+
+# Marginalized by crop across habitat
+emt_rich_00c <- emtrends(brm_rich_00,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_rich_10c <- emtrends(brm_rich_10,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_rich_20c <- emtrends(brm_rich_20,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_00c <- emtrends(brm_abund_00,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_10c <- emtrends(brm_abund_10,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_20c <- emtrends(brm_abund_20,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_size_00c <- emtrends(brm_size_00,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+
+# Marginalized by habitat across crop
+emt_rich_00h <- emtrends(brm_rich_00,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_rich_10h <- emtrends(brm_rich_10,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_rich_20h <- emtrends(brm_rich_20,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_00h <- emtrends(brm_abund_00,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_10h <- emtrends(brm_abund_10,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_20h <- emtrends(brm_abund_20,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_size_00h <- emtrends(brm_size_00,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+
+# Supplemental models
+
+emt_abund_30c <- emtrends(brm_abund_30,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_30h <- emtrends(brm_abund_30,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_40c <- emtrends(brm_abund_40,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_40h <- emtrends(brm_abund_40,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_50c <- emtrends(brm_abund_50,
+                 specs = c("crop.pool"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+
+emt_abund_50h <- emtrends(brm_abund_50,
+                 specs = c("snh.type"),
+                 var = "distance100",
+                 ci.lvl = 0.95)
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+## Extract MCMC draws from emtrends objects
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+# Marginalized across all crops and habitats
+
+emt_rich_00.mcmc <- get_mcmc(emt_rich_00, "01_brm_rich_00")
+
+emt_rich_00d.mcmc <- as.mcmc(emt_rich_00d) %>% # extract MCMC chains
+  map(as_tibble) %>% # convert list items to tibbles
+  bind_rows() %>% # collapse list into single table
+  pivot_longer(cols = everything(), names_to = "level", values_to = "log.trap.days") %>%
+  mutate(log.trap.days_response = exp(log.trap.days)) %>% # exponentiate to get back to response scale
+  select(-c(1))
+
+emt_rich_10.mcmc <- get_mcmc(emt_rich_00, "02_brm_rich_10")
+
+emt_rich_20.mcmc <- get_mcmc(emt_rich_00, "03_brm_rich_20")
+
+emt_abund_00.mcmc <- get_mcmc(emt_rich_00, "04_brm_abund_00")
+
+emt_abund_10.mcmc <- get_mcmc(emt_rich_00, "05_brm_abund_10")
+
+emt_abund_20.mcmc <- get_mcmc(emt_rich_00, "06_brm_abund_20")
+
+emt_abund_30.mcmc <- get_mcmc(emt_rich_00, "07_brm_abund_30")
+
+emt_abund_40.mcmc <- get_mcmc(emt_rich_00, "08_brm_abund_40")
+
+emt_abund_50.mcmc <- get_mcmc(emt_rich_00, "09_brm_abund_50")
+
+emt_size_00.mcmc <- get_mcmc(emt_rich_00, "10_brm_size_00")
+
+emt_overall <- bind_rows(emt_rich_00.mcmc,
+                         emt_rich_10.mcmc,
+                         emt_rich_20.mcmc,
+                         emt_abund_00.mcmc,
+                         emt_abund_10.mcmc,
+                         emt_abund_20.mcmc,
+                         emt_abund_30.mcmc,
+                         emt_abund_40.mcmc,
+                         emt_abund_50.mcmc,
+                         emt_size_00.mcmc) %>%
+  mutate(model = factor(model, levels = c(
+    "01_brm_rich_00","02_brm_rich_10", "03_brm_rich_20",
+    "04_brm_abund_00", "05_brm_abund_10", "06_brm_abund_20",
+    "07_brm_abund_30", "08_brm_abund_40", "09_brm_abund_50",
+    "10_brm_size_00"))) 
+
+
+# Marginalized by crop across habitat
+
+emt_rich_00c.mcmc <- get_mcmc.c(emt_rich_00c, "01_brm_rich_00")
+
+emt_rich_10c.mcmc <- get_mcmc.c(emt_rich_10c, "02_brm_rich_10")
+
+emt_rich_20c.mcmc <- get_mcmc.c(emt_rich_20c, "03_brm_rich_20")
+
+emt_abund_00c.mcmc <- get_mcmc.c(emt_abund_00c, "04_brm_abund_00")
+
+emt_abund_10c.mcmc <- get_mcmc.c(emt_abund_10c, "05_brm_abund_10")
+
+emt_abund_20c.mcmc <- get_mcmc.c(emt_abund_20c, "06_brm_abund_20")
+
+emt_size_00c.mcmc <- get_mcmc.c(emt_size_00c, "10_brm_size_00")
+
+
+# Marginalized by habitat across crop
+
+emt_rich_00h.mcmc <- get_mcmc.h(emt_rich_00h, "01_brm_rich_00")
+
+emt_rich_10h.mcmc <- get_mcmc.h(emt_rich_10h, "02_brm_rich_10")
+
+emt_rich_20h.mcmc <- get_mcmc.h(emt_rich_20h, "03_brm_rich_20")
+
+emt_abund_00h.mcmc <- get_mcmc.h(emt_abund_00h, "04_brm_abund_00")
+
+emt_abund_10h.mcmc <- get_mcmc.h(emt_abund_10h, "05_brm_abund_10")
+
+emt_abund_20h.mcmc <- get_mcmc.h(emt_abund_20h, "06_brm_abund_20")
+
+emt_size_00h.mcmc <- get_mcmc.h(emt_size_00h, "10_brm_size_00")
+
+
+slope_parameters1.5m <- bind_rows(emt_rich_00c.mcmc,
+                                  emt_rich_00h.mcmc,
+                                  emt_rich_10c.mcmc,
+                                  emt_rich_10h.mcmc,
+                                  emt_rich_20c.mcmc,
+                                  emt_rich_20h.mcmc,
+                                  emt_abund_00c.mcmc,
+                                  emt_abund_00h.mcmc,
+                                  emt_abund_10c.mcmc,
+                                  emt_abund_10h.mcmc,
+                                  emt_abund_20c.mcmc,
+                                  emt_abund_20h.mcmc) %>%
+  mutate(model = factor(model, levels = c(
+    "01_brm_rich_00","02_brm_rich_10", "03_brm_rich_20",
+    "04_brm_abund_00", "05_brm_abund_10", "06_brm_abund_20"))) %>%
+  mutate(par = tolower(par))
+
+
+# supplement models
+
+
+emt_abund_30c.mcmc <- get_mcmc.c(emt_abund_30c, "07_brm_abund_30")
+
+emt_abund_40c.mcmc <- get_mcmc.c(emt_abund_40c, "08_brm_abund_40") 
+
+emt_abund_50c.mcmc <- get_mcmc.c(emt_abund_50c, "09_brm_abund_50") 
+
+
+emt_abund_30h.mcmc <- get_mcmc.h(emt_abund_30h, "07_brm_abund_30")
+
+emt_abund_40h.mcmc <- get_mcmc.h(emt_abund_40h, "08_brm_abund_40")
+
+emt_abund_50h.mcmc <- get_mcmc.h(emt_abund_50h, "09_brm_abund_50")
+                 
+                
+
+slope_parameters2.5m <- bind_rows(emt_abund_30c.mcmc,
+                                  emt_abund_30h.mcmc,
+                                  emt_abund_40c.mcmc,
+                                  emt_abund_40h.mcmc,
+                                  emt_abund_50c.mcmc,
+                                  emt_abund_50h.mcmc) %>%
+  mutate(model = factor(model, levels = c("07_brm_abund_30","08_brm_abund_40",
+                                          "09_brm_abund_50"))) %>%
+  mutate(par = tolower(par))
+
+# all in one 
+slope_parameters1.6m <- bind_rows(emt_rich_00c.mcmc,
+                                  emt_rich_00h.mcmc,
+                                  emt_rich_10c.mcmc,
+                                  emt_rich_10h.mcmc,
+                                  emt_rich_20c.mcmc,
+                                  emt_rich_20h.mcmc,
+                                  emt_abund_00c.mcmc,
+                                  emt_abund_00h.mcmc,
+                                  emt_abund_10c.mcmc,
+                                  emt_abund_10h.mcmc,
+                                  emt_abund_20c.mcmc,
+                                  emt_abund_20h.mcmc,
+                                  emt_abund_30c.mcmc,
+                                  emt_abund_30h.mcmc,
+                                  emt_abund_40c.mcmc,
+                                  emt_abund_40h.mcmc,
+                                  emt_abund_50c.mcmc,
+                                  emt_abund_50h.mcmc) %>%
+  mutate(model = factor(model, levels = c(
+    "01_brm_rich_00","02_brm_rich_10", "03_brm_rich_20",
+    "04_brm_abund_00", "05_brm_abund_10", "06_brm_abund_20",
+    "07_brm_abund_30", "08_brm_abund_40", "09_brm_abund_50"))) %>%
+  mutate(par = tolower(par))
+
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+## Extract probabilities that slopes are positive/negative
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+df0 <- emt_overall %>% group_by(model) %>%
+  summarise(n.pos = length(model[slope_response>1]),
+            n.neg = length(model[slope_response<1]),
+            n.tot = length(model),
+            median = median(slope_response),
+            per_change = (median -1)*100) %>%
+  mutate(prop.pos = n.pos/n.tot * 100, prop.neg = n.neg/n.tot * 100)
+
+df0.2 <-  filter(emt_overall) %>% 
+  group_by(model) %>%
+  median_qi(slope_response, .width = c(.95)) 
+
+df1 <-  filter(slope_parameters1.5m, class %in% c("crop", "habitat")) %>% 
+  group_by(model, class, par) %>%
+  summarise(n.pos = length(par[slope_response>1]),
+            n.neg = length(par[slope_response<1]),
+            n.tot = length(par),
+            median = median(slope_response),
+            per_change = (median -1)*100) %>%
+  mutate(prop.pos = n.pos/n.tot * 100, prop.neg = n.neg/n.tot * 100)
+ 
+df2 <-  filter(slope_parameters1.5m, class %in% c("crop", "habitat")) %>% 
+  group_by(model, class, par) %>%
+  median_qi(slope_response, .width = c(.95)) 
+
+df3 <-  filter(slope_parameters2.5m, class %in% c("crop", "habitat")) %>% 
+  group_by(model, class, par) %>%
+  summarise(n.pos = length(par[slope_response>1]),
+            n.neg = length(par[slope_response<1]),
+            n.tot = length(par),
+            median = median(slope_response),
+            per_change = (median -1)*100) %>%
+  mutate(prop.pos = n.pos/n.tot * 100, prop.neg = n.neg/n.tot * 100)
+ 
+df4 <-  filter(slope_parameters2.5m, class %in% c("crop", "habitat")) %>% 
+  group_by(model, class, par) %>%
+  median_qi(slope_response, .width = c(.95)) 
+```
+
+\normalsize
+
+## Plot slope parameters
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+palette1.5 <- c('01_brm_rich_00'  = '#928557',  
+                "02_brm_rich_10"  = '#83A58C',
+                "03_brm_rich_20"  = '#63BDCF', 
+                "04_brm_abund_00" = '#DF8A5A', 
+                "05_brm_abund_10" = '#AC4D41', 
+                "06_brm_abund_20" = '#edc775',
+                "10_brm_size_00"  = '#edc775')
+
+class.labs <- c("crop type", "adjacent habitat type")
+names(class.labs) <- c("crop", "habitat")
+
+mod.labs <- c("richness\n(overall)",
+              "richness\n(predatory)",
+              "richness\n(granivorous)",
+              "activity density\n(overall)",
+              "activity density\n(predatory)",
+              "activity density\n(granivorous)",
+              "activity density\n(small)",
+              "activity density\n(medium)",
+              "activity density\n(large)")
+
+names(mod.labs) <- c('01_brm_rich_00',  
+                     "02_brm_rich_10",
+                     "03_brm_rich_20", 
+                     "04_brm_abund_00", 
+                     "05_brm_abund_10", 
+                     "06_brm_abund_20",
+                     "07_brm_abund_30",
+                     "08_brm_abund_40",
+                     "09_brm_abund_50")
+
+slope_parameters1.6m$class <- as.factor(slope_parameters1.6m$class )
+slope_parameters1.6m <- droplevels(slope_parameters1.6m)
+
+ggplot(filter(slope_parameters1.6m, class %in% c("crop", "habitat")), 
+             aes(slope_response, par, color = model)) +
+  geom_vline(xintercept = 1, linetype = "dashed", col = "black") +
+  stat_interval(aes(color_ramp = stat(level)), width=1) +
+  stat_summary(data = slope_parameters1.6m %>% filter(class == "crop"), 
+               fun="mean", geom="segment", 
+               mapping=aes(xend=..x.. , yend=..y.. -0.090), 
+               color='black') +
+  stat_summary(data = slope_parameters1.6m %>% filter(class == "crop"), 
+               fun="mean", geom="segment", 
+               mapping=aes(xend=..x.. , yend=..y.. +0.093), 
+               color='black') +
+  stat_summary(data = slope_parameters1.6m %>% filter(class == "habitat"), 
+               fun="mean", geom="segment", 
+               mapping=aes(xend=..x.. , yend=..y.. -0.055), 
+               color='black') +
+  stat_summary(data = slope_parameters1.6m %>% filter(class == "habitat"), 
+               fun="mean", geom="segment", 
+               mapping=aes(xend=..x.. , yend=..y.. +0.056), 
+               color='black') +
+  labs(x = "slope coefficient", y = " ", fill = "Model", color_ramp = "CI") +
+  facet_grid(model ~ class, scales='free', switch = "y", 
+             labeller = labeller(class = class.labs, model=mod.labs)) + 
+  scale_x_continuous(position = "top") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        strip.text.y.left = element_text(angle = 0),
+        axis.title.x=element_text(vjust = +3),
+        axis.text.y = element_text(size=8),
+        legend.position = "none") +
+  guides(color = guide_legend(order = 1),
+         color_ramp = "none") +
+  scale_color_discrete(name = "Model",
+                       labels = c("richness\n(overall)\n", 
+                                  "richness\n(predatory)\n",
+                                  "richness\n(granivorous)\n",
+                                  "activity density\n(overall)\n",
+                                  "activity density\n(predatory)\n",
+                                  "activity density\n(granivorous)\n",
+                                  "activity density\n(small)",
+                                  "activity density\n(medium)",
+                                  "activity density\n(large)")) +
+  facetted_pos_scales(y = list(scale_y_discrete(limit = c("cereal", "legume", 
+                                                          "maize", "oilseed", 
+                                                          "vegetable"),
+                                                labels = c("cereal\n[712 fields]",
+                                                           "legume\n[47 fields]",
+                                                           "maize\n[77 fields]",
+                                                           "oilseed\n[183 fields]",
+                                                           "vegetable\n[44 fields]")),
+                               scale_y_discrete(limit = c("control", "herbaceous", "woody"), 
+                                                 labels = c("control\n[264 fields]",
+                                                            "herbaceous\n[498 fields]",
+                                                            "woody\n[301 fields]"))))+
+  coord_flip()
+
+
+# Slope parameter for trap.days
+ggplot(filter(brm_rich_00_slope_parameters, class == "trapping.days"), aes(coef)) +
+  stat_halfeye() +
+  labs(x = "slope coefficient", y = NULL) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  guides(color = guide_legend(order = 1),
+         color_ramp = guide_legend(order = 2)) +
+  geom_vline(xintercept = 1, linetype = "dashed", col = "black")
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+## Plot contrasts
+### Crop
+
+\footnotesize 
+
+```{r message=FALSE, warning=FALSE}
+ggplot(filter(slope_parameters1, class == "crop.contrast"), aes(coef, par, color = model)) +
+  stat_interval(aes(color_ramp = stat(level))) +
+  stat_pointinterval(color = "black", 
+                     pch = 20,
+                     size = 2,
+                     .width = c(0.00001)) + # effectively removes the line and leaves the point
+  theme_bw(8) +
+  labs(y = "Contrast", x = "Slope coefficient difference", color_ramp = "CI") +
+  theme(strip.text.x = element_blank(), 
+        strip.background.x = element_blank(),
+        panel.grid = element_blank()) +
+  guides(color = guide_legend(order = 1), 
+       color_ramp = guide_legend(order = 2)) +
+  facet_wrap(~model, scales = "free_x", ncol = 4) +
+  scale_color_discrete(name = "Model",
+                       labels = c("richness", 
+                                 "activity density\n(predatory + omnivorous)",
+                                 "activity density (granivorous)",
+                                 "size")) +
+  geom_vline(xintercept = 0, linetype = "dashed", col = "black") +
+  scale_y_discrete(limits = rev,
+                   labels = rev(c("cereal - legume", "cereal - maize", "cereal - oilseed",
+                              "cereal -  vegetable", "legume - maize", "oilseed - legume",
+                              "oilseed - maize", "vegetable - legume", "vegetable - maize",
+                              "vegetable - oilseed"))
+                   )
+```
+
+\normalsize
+
+### Habitat
+
+\footnotesize 
+
+```{r message=FALSE, warning=FALSE}
+
+ggplot(filter(slope_parameters1, class == "habitat.contrast"), aes(coef, par, color = model)) +
+    stat_interval(aes(color_ramp = stat(level))) +
+    stat_pointinterval(color = "black", 
+                       pch = 20,
+                       .width = c(0.00001)) + # effectively removes the line and leaves the point
+    theme_bw(8) +
+    labs(y = "Contrast", x = "Slope coefficient difference", color_ramp = "CI") +
+    theme(strip.text.x = element_blank(), 
+          strip.background.x = element_blank(),
+          panel.grid = element_blank()) +
+  facet_wrap(~model, scales = "free_x", ncol = 4) +
+  scale_color_discrete(name = "Model",
+                       labels = c("richness", 
+                                 "activity density\n(predatory + omnivorous)",
+                                 "activity density (granivorous)",
+                                 "size")) +
+  geom_vline(xintercept = 0, linetype = "dashed", col = "black") +
+  scale_y_discrete(labels = c("control - herbaceous", "control - woody", "herbaceous - woody"))
+```
+
+```{r include=FALSE}
+gc()
+```
+
+\normalsize
+
+# 4. Plot varying effects of study
+## Richness
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_rich_00.varslope_study <- var_eff_plot_slope(brm_rich_00, brm_rich_00_studyslope_parameters)
+brm_rich_00.varint_study <- var_eff_plot_int(brm_rich_00, brm_rich_00_studyint_parameters)
+(brm_rich_00.varslope_study | brm_rich_00.varint_study) + 
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Richness (predatory + omnivorous)
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_rich_10.varslope_study <- var_eff_plot_slope(brm_rich_10, brm_rich_10_studyslope_parameters)
+brm_rich_10.varint_study <- var_eff_plot_int(brm_rich_10, brm_rich_10_studyint_parameters)
+(brm_rich_10.varslope_study | brm_rich_10.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Richness (granivorous)
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_rich_20.varslope_study <- var_eff_plot_slope(brm_rich_20, brm_rich_20_studyslope_parameters)
+brm_rich_20.varint_study <- var_eff_plot_int(brm_rich_20, brm_rich_20_studyint_parameters)
+(brm_rich_20.varslope_study | brm_rich_20.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Activity density
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_abund_00.varslope_study <- var_eff_plot_slope(brm_abund_00, brm_abund_00_studyslope_parameters)
+brm_abund_00.varint_study <- var_eff_plot_int(brm_abund_00, brm_abund_00_studyint_parameters)
+(brm_abund_00.varslope_study | brm_abund_00.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Activity density (predatory + omnivorous)
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_abund_10.varslope_study <- var_eff_plot_slope(brm_abund_10, brm_abund_10_studyslope_parameters)
+brm_abund_10.varint_study <- var_eff_plot_int(brm_abund_10, brm_abund_10_studyint_parameters)
+(brm_abund_10.varslope_study | brm_abund_10.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Activity density (granivorous)
+
+\footnotesize
+```{r message=FALSE, warning=FALSE}
+brm_abund_20.varslope_study <- var_eff_plot_slope(brm_abund_20, brm_abund_20_studyslope_parameters)
+brm_abund_20.varint_study <- var_eff_plot_int(brm_abund_20, brm_abund_20_studyint_parameters)
+(brm_abund_20.varslope_study | brm_abund_20.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Activity density (small)
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_abund_30.varslope_study <- var_eff_plot_slope(brm_abund_30, brm_abund_30_studyslope_parameters)
+brm_abund_30.varint_study <- var_eff_plot_int(brm_abund_30, brm_abund_30_studyint_parameters)
+(brm_abund_30.varslope_study | brm_abund_30.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Activity density (medium)
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_abund_40.varslope_study <- var_eff_plot_slope(brm_abund_40, brm_abund_40_studyslope_parameters)
+brm_abund_40.varint_study <- var_eff_plot_int(brm_abund_40, brm_abund_40_studyint_parameters)
+(brm_abund_40.varslope_study | brm_abund_40.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Activity density (large)
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_abund_50.varslope_study <- var_eff_plot_slope(brm_abund_50, brm_abund_50_studyslope_parameters)
+brm_abund_50.varint_study <- var_eff_plot_int(brm_abund_50, brm_abund_50_studyint_parameters)
+(brm_abund_50.varslope_study | brm_abund_50.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
+## Size
+
+\footnotesize
+
+```{r message=FALSE, warning=FALSE}
+brm_size_00.varslope_study <- var_eff_plot_slope(brm_size_00, brm_size_00_studyslope_parameters)
+brm_size_00.varint_study <- var_eff_plot_int(brm_size_00, brm_size_00_studyint_parameters)
+(brm_size_00.varslope_study | brm_size_00.varint_study) +
+  plot_annotation(tag_levels = "A")
+```
+
+\normalsize
+
